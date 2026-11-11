@@ -759,9 +759,17 @@ impl Launcher {
             Theme::Light => false,
             Theme::System => !system::system_uses_light_theme(),
         };
-        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, self.config.backdrop, self.unified());
+        let tint = self.config.dock_tint();
+        // The bottom launcher is the dock grown taller, so it shares the dock's color.
+        self.palette = crate::theme::apply_backdrop(
+            self.hwnd,
+            dark,
+            self.config.backdrop,
+            self.unified(),
+            tint.filter(|_| self.unified()),
+        );
         if let Some(dock) = &mut self.dock {
-            dock.apply_theme(Palette::new(dark, true), self.config.backdrop);
+            dock.apply_theme(dark, self.config.backdrop, tint);
         }
         self.invalidate();
     }
@@ -1120,6 +1128,7 @@ impl Launcher {
             self.palette.text.r > 0.5,
             crate::config::Backdrop::Solid,
             true,
+            self.config.dock_tint().filter(|_| self.unified()),
         );
         self.morph.as_mut().unwrap().start = Instant::now();
         self.outline = Some(from);

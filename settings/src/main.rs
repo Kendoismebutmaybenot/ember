@@ -8,6 +8,7 @@ mod pins;
 #[allow(dead_code)]
 #[path = "../../src/channel.rs"]
 mod channel;
+mod color_wheel;
 mod config;
 mod hotkey;
 #[path = "../../src/install.rs"]

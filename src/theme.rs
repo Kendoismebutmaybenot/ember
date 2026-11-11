@@ -12,6 +12,54 @@ fn rgba(hex: u32, a: f32) -> D2D1_COLOR_F {
     }
 }
 
+/// A user-chosen surface color from `dock_color`: `#RRGGBB`, or `#RRGGBBAA`
+/// where `AA` sets how strongly the color covers the acrylic or mica backdrop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tint {
+    pub rgb: u32,
+    pub alpha: Option<f32>,
+}
+
+impl Tint {
+    /// How much a translucent surface shows the color when `AA` is absent.
+    const DEFAULT_ALPHA: f32 = 0.55;
+
+    /// Reads `#RRGGBB` or `#RRGGBBAA`. An empty string means no tint.
+    pub fn parse(text: &str) -> Option<Self> {
+        let hex = text.trim().strip_prefix('#')?;
+        if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let value = u32::from_str_radix(hex, 16).ok()?;
+        Some(if hex.len() == 6 {
+            Self {
+                rgb: value,
+                alpha: None,
+            }
+        } else {
+            Self {
+                rgb: value >> 8,
+                alpha: Some((value & 0xFF) as f32 / 255.0),
+            }
+        })
+    }
+
+    /// Whether light text reads better on this color, by WCAG relative luminance.
+    pub fn is_dark(self) -> bool {
+        let channel = |shift: u32| {
+            let c = ((self.rgb >> shift) & 0xFF) as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+        // Above ~0.18, black text has more contrast than white.
+        luminance < 0.18
+    }
+}
+
 pub struct Palette {
     pub background: D2D1_COLOR_F,
     pub text: D2D1_COLOR_F,
@@ -25,9 +73,28 @@ pub struct Palette {
     pub scrollbar: D2D1_COLOR_F,
     /// An opaque background color, for marks on the accent color.
     pub background_solid: D2D1_COLOR_F,
+    /// The color composition acrylic blurs behind the surface.
+    pub acrylic_tint: D2D1_COLOR_F,
 }
 
 impl Palette {
+    /// The palette for `dark` and `translucent`, recolored by `tint`. A tint
+    /// picks light or dark text from its own brightness, not from the theme.
+    pub fn with_tint(dark: bool, translucent: bool, tint: Option<Tint>) -> Self {
+        let Some(tint) = tint else {
+            return Self::new(dark, translucent);
+        };
+        let mut palette = Self::new(tint.is_dark(), translucent);
+        let alpha = if translucent {
+            tint.alpha.unwrap_or(Tint::DEFAULT_ALPHA)
+        } else {
+            1.0
+        };
+        palette.background = rgba(tint.rgb, alpha);
+        palette.acrylic_tint = rgba(tint.rgb, 1.0);
+        palette
+    }
+
     /// A translucent fill lets the acrylic or mica backdrop show through.
     pub fn new(dark: bool, translucent: bool) -> Self {
         if dark {
@@ -47,6 +114,7 @@ impl Palette {
                 tile: rgba(0xFFFFFF, 0.07),
                 scrollbar: rgba(0xFFFFFF, 0.22),
                 background_solid: rgba(0x1C1C1C, 1.0),
+                acrylic_tint: rgba(0x1C1C1C, 1.0),
             }
         } else {
             Self {
@@ -65,6 +133,7 @@ impl Palette {
                 tile: rgba(0x000000, 0.05),
                 scrollbar: rgba(0x000000, 0.25),
                 background_solid: rgba(0xFFFFFF, 1.0),
+                acrylic_tint: rgba(0xFFFFFF, 1.0),
             }
         }
     }
@@ -122,9 +191,9 @@ fn composition_acrylic(hwnd: windows::Win32::Foundation::HWND, enabled: bool, pa
             state: if enabled { 4 } else { 0 },
             flags: 2,
             tint: 0x70000000
-                | ((palette.background_solid.b * 255.0) as u32) << 16
-                | ((palette.background_solid.g * 255.0) as u32) << 8
-                | (palette.background_solid.r * 255.0) as u32,
+                | ((palette.acrylic_tint.b * 255.0) as u32) << 16
+                | ((palette.acrylic_tint.g * 255.0) as u32) << 8
+                | (palette.acrylic_tint.r * 255.0) as u32,
             animation: 0,
         };
         let mut attribute = Attribute {
@@ -144,12 +213,15 @@ pub fn apply_backdrop(
     dark: bool,
     backdrop: crate::config::Backdrop,
     persistent: bool,
+    tint: Option<Tint>,
 ) -> Palette {
     use crate::config::Backdrop;
     use windows::Win32::Graphics::Dwm::*;
     use windows::Win32::UI::Controls::MARGINS;
     let translucent = backdrop != Backdrop::Solid && transparency_available();
-    let mut palette = Palette::new(dark, translucent);
+    let mut palette = Palette::with_tint(dark, translucent, tint);
+    // DWM's caption and dark-mode flags follow the text the tint chose.
+    let dark = palette.text.r > 0.5;
     unsafe {
         let set = |attr, value: i32| DwmSetWindowAttribute(hwnd, attr, (&value as *const i32).cast(), 4);
         let _ = set(DWMWA_USE_IMMERSIVE_DARK_MODE, i32::from(dark));
@@ -202,7 +274,7 @@ pub fn apply_backdrop(
         }
         let composition = composition_acrylic(hwnd, accent, &palette);
         if !system || accent && !composition {
-            palette = Palette::new(dark, false);
+            palette = Palette::with_tint(dark, false, tint);
         }
     }
     palette
@@ -256,5 +328,44 @@ pub fn shape(hwnd: windows::Win32::Foundation::HWND, width: i32, height: i32, ra
         if !region.is_invalid() && SetWindowRgn(hwnd, Some(region), false) == 0 {
             let _ = DeleteObject(region.into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tints_parse_with_and_without_alpha() {
+        assert_eq!(
+            Tint::parse("#1E3A8A"),
+            Some(Tint {
+                rgb: 0x1E3A8A,
+                alpha: None
+            })
+        );
+        let tint = Tint::parse(" #ff000080 ").unwrap();
+        assert_eq!(tint.rgb, 0xFF0000);
+        assert!((tint.alpha.unwrap() - 128.0 / 255.0).abs() < 1e-6);
+        for bad in ["", "1E3A8A", "#12345", "#1234567", "#GGGGGG", "#123456789"] {
+            assert_eq!(Tint::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn tints_choose_readable_text() {
+        assert!(Tint::parse("#000000").unwrap().is_dark());
+        assert!(Tint::parse("#1E3A8A").unwrap().is_dark());
+        assert!(!Tint::parse("#FFFFFF").unwrap().is_dark());
+        assert!(!Tint::parse("#FDE047").unwrap().is_dark());
+        // Light text on a dark tint, whatever the theme says.
+        let palette = Palette::with_tint(false, true, Tint::parse("#101010"));
+        assert!(palette.text.r > 0.5);
+        assert!((palette.background.a - Tint::DEFAULT_ALPHA).abs() < 1e-6);
+        // A solid surface is always opaque.
+        assert_eq!(
+            Palette::with_tint(true, false, Tint::parse("#10101040")).background.a,
+            1.0
+        );
     }
 }

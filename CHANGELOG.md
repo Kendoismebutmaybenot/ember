@@ -10,7 +10,7 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 - Drag dock apps to rearrange them, pinning or unpinning them by where you drop. (#65, by @SorbetMango, fixes #32)
 - Drag the launcher, notification icons, status and clock to any place in the dock. The order is saved. (#65)
 - Choose which status icons the dock shows, and whether each sits in the status group or on its own. In Settings, under Status. (#66)
-
+- Choose the dock's color in Settings > Appearance: presets including pure black, a hex box, or your own color from a color wheel. Text turns light or dark to stay readable, and with Acrylic a strength slider sets how much blur shows through. (#60)
 - Pin apps to the dock: right-click an app and choose Pin to dock. Pinned apps stay in the dock, before running apps, and start with a click. (#54, by @SorbetMango, fixes #31)
 - Apps with more than one window open show a second dot under their dock icon. (#55)
 - The autohide dock starts to slide in sooner when you move the pointer to the bottom edge. (#25, by @RayTrunk, fixes #20)

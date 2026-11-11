@@ -143,6 +143,7 @@ Open **Settings** from Wisp's tray icon, or edit `%APPDATA%\wisp\config.toml`. T
 | `dock_status_group` | `["sound", "battery", "wifi", "bluetooth"]` | Items in the status group, in home-cell order. |
 | `dock_status_icons` | `[]` | Items with their own draggable slot; items in neither list are hidden. The group wins if an item is in both lists. |
 | `dock_icon_size` | `32` | App icon size in the dock, 24–40 DIP. The dock's height, spacing and status area scale with it. |
+| `dock_color` | `""` | The dock's color as `"#RRGGBB"`, or `"#RRGGBBAA"` where `AA` sets how strongly it covers the acrylic blur. Text turns light or dark to stay readable. Empty uses the theme's colors |
 | `hide_taskbar` | `true` | Hides the Windows taskbar while Wisp runs |
 | `position` | `"bottom"` | `"bottom"` grows the launcher from the dock; `"center"` opens it in the middle |
 | `theme` | `"system"` | `"system"`, `"dark"` or `"light"` |

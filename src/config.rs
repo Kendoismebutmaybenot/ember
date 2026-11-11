@@ -62,6 +62,8 @@ pub struct Config {
     pub dock_order: Vec<String>,
     pub dock_status_group: Vec<String>,
     pub dock_status_icons: Vec<String>,
+    /// `#RRGGBB` or `#RRGGBBAA`, or empty for the theme's colors.
+    pub dock_color: String,
     pub hotkey: String,
     pub max_results: usize,
     pub theme: Theme,
@@ -81,6 +83,11 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The dock's color, or `None` for the theme's colors.
+    pub fn dock_tint(&self) -> Option<crate::theme::Tint> {
+        crate::theme::Tint::parse(&self.dock_color)
+    }
+
     pub fn path() -> PathBuf {
         util::data_dir().join("config.toml")
     }
@@ -106,6 +113,14 @@ impl Config {
             Ok(mut config) => {
                 config.max_results = config.max_results.clamp(1, 20);
                 config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
+                if !config.dock_color.trim().is_empty() && config.dock_tint().is_none() {
+                    let error = format!(
+                        "config.toml: dock_color \"{}\" must look like #1E3A8A or #1E3A8AC0.",
+                        config.dock_color
+                    );
+                    config.dock_color.clear();
+                    return (config, Some(error));
+                }
                 (config, None)
             }
             Err(e) => (Config::default(), Some(format!("config.toml: {}", e.message()))),
@@ -243,6 +258,8 @@ mod tests {
         let default = Config::default();
         assert!(default.dock && default.hide_taskbar);
         assert_eq!(default.dock_icon_size, 32);
+        assert_eq!(default.dock_tint(), None);
+        assert_eq!(config.dock_color, "");
         assert_eq!(default.position, Position::Bottom);
         assert!(Config::parse("dock = \"yes\"").is_err());
     }

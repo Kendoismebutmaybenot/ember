@@ -1,7 +1,7 @@
 //! The settings window: a sidebar of pages. `--welcome` shows the one-time
 //! onboarding instead.
 
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use gpui_kit::component::{
     button::{Button, ButtonGroup, ButtonVariants},
@@ -9,11 +9,13 @@ use gpui_kit::component::{
     select::{SearchableVec, Select, SelectEvent, SelectState},
     slider::{Slider, SliderEvent, SliderState},
     switch::Switch,
+    tooltip::Tooltip,
 };
-use gpui_kit::{component::*, prelude::*, *};
+use gpui_kit::{base::ElementExt, component::*, prelude::*, *};
 use toml_edit::{Array, Value};
 
 use crate::{
+    color_wheel,
     config::{self, Config, Store},
     hotkey,
     palette::{self, Palette},
@@ -30,7 +32,60 @@ const WINDOW_LISTS: [(&str, &str); 3] = [
     ("always", "Always"),
     ("off", "Off"),
 ];
+/// Dock color presets: config value and name. The first keeps the theme's colors.
+/// A preset with its own `AA` (like Black) keeps that opacity.
+const DOCK_COLORS: [(&str, &str); 11] = [
+    ("", "Theme"),
+    ("#000000FF", "Black"),
+    ("#0F172A", "Midnight"),
+    ("#1E3A8A", "Navy"),
+    ("#0F766E", "Teal"),
+    ("#166534", "Forest"),
+    ("#6B21A8", "Purple"),
+    ("#9F1239", "Rose"),
+    ("#B45309", "Amber"),
+    ("#475569", "Slate"),
+    ("#F1F5F9", "Snow"),
+];
+/// The color picker's wheel and brightness bar, in DIP.
+const WHEEL: f32 = 168.;
+const BAR_WIDTH: f32 = 220.;
+const THUMB: f32 = 18.;
 const ONBOARDING_STEPS: usize = 3;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Drag {
+    Wheel,
+    Bar,
+}
+
+/// The open color picker. Each finished drag saves the color so the dock
+/// shows it; Cancel puts back the color from when the picker opened.
+struct Picker {
+    h: f32,
+    s: f32,
+    v: f32,
+    original: String,
+    drag: Option<Drag>,
+}
+
+impl Picker {
+    fn rgb(&self) -> u32 {
+        color_wheel::from_hsv(self.h, self.s, self.v)
+    }
+
+    fn follow(&mut self, rgb: u32) {
+        let (h, s, v) = color_wheel::to_hsv(rgb);
+        // Black and greys have no hue of their own: keep the last one.
+        if s > 0.0 && v > 0.0 {
+            self.h = h;
+        }
+        if v > 0.0 {
+            self.s = s;
+        }
+        self.v = v;
+    }
+}
 type Choices = SelectState<SearchableVec<&'static str>>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -81,17 +136,20 @@ pub struct Settings {
     shortcut_error: Option<String>,
     url_error: Option<String>,
     folder_error: Option<String>,
+    color_error: Option<String>,
     page: Page,
     /// `Some(step)` while the one-time onboarding is showing.
     onboarding: Option<usize>,
     shortcut: Entity<InputState>,
     url: Entity<InputState>,
     folder: Entity<InputState>,
+    color: Entity<InputState>,
     theme: Entity<Choices>,
     backdrop: Entity<Choices>,
     window_list: Entity<Choices>,
     results: Entity<SliderState>,
     app_icon_size: Entity<SliderState>,
+    opacity: Entity<SliderState>,
     pinned_count: usize,
     autostart: bool,
     powertoys: Result<bool, String>,
@@ -99,6 +157,10 @@ pub struct Settings {
     focus: FocusHandle,
     icon: Arc<Image>,
     updates: Updates,
+    picker: Option<Picker>,
+    wheel: Arc<Image>,
+    wheel_bounds: Rc<Cell<Bounds<Pixels>>>,
+    bar_bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
 fn labels(choices: &[(&'static str, &'static str)]) -> Vec<&'static str> {
@@ -133,6 +195,11 @@ impl Settings {
         let shortcut = cx.new(|cx| InputState::new(window, cx).default_value(config.hotkey.clone()));
         let url = cx.new(|cx| InputState::new(window, cx).default_value(config.search_url.clone()));
         let folder = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name"));
+        let color = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("#1E3A8A")
+                .default_value(config.dock_color.clone())
+        });
         let theme = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(labels(&THEMES)),
@@ -170,6 +237,13 @@ impl Settings {
                 .max(40.)
                 .step(1.)
                 .default_value(config.dock_icon_size as f32)
+        });
+        let opacity = cx.new(|_| {
+            SliderState::new()
+                .min(10.)
+                .max(100.)
+                .step(5.)
+                .default_value(opacity_percent(&config.dock_color))
         });
         let focus = cx.focus_handle();
 
@@ -242,6 +316,31 @@ impl Settings {
             }
         })
         .detach();
+        cx.subscribe_in(&color, window, |this, input, event, window, cx| {
+            if matches!(event, InputEvent::Change) {
+                let value = input.read(cx).value().to_string();
+                this.color_error = config::validate_color(&value).err();
+                cx.notify();
+            } else if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                let value = input.read(cx).value().trim().to_uppercase();
+                if config::validate_color(&value).is_ok() && value != this.config.dock_color {
+                    this.set_dock_color(value, window, cx);
+                    this.picker_follow_config();
+                }
+            }
+        })
+        .detach();
+        cx.subscribe_in(&opacity, window, |this, _, event, window, cx| {
+            if let SliderEvent::Change(value) = event
+                && let Some((rgb, alpha)) = config::color_parts(&this.config.dock_color)
+            {
+                let next = (value.start().clamp(10., 100.) * 2.55).round() as u8;
+                if next != alpha {
+                    this.set_dock_color(format!("#{rgb:06X}{next:02X}"), window, cx);
+                }
+            }
+        })
+        .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.pinned_count = Self::pinned_count();
@@ -262,6 +361,7 @@ impl Settings {
             store,
             shortcut_error: hotkey::parse(&config.hotkey).err(),
             url_error: config::validate_url(&config.search_url).err(),
+            color_error: config::validate_color(&config.dock_color).err(),
             config,
             error,
             folder_error: None,
@@ -273,17 +373,27 @@ impl Settings {
             shortcut,
             url,
             folder,
+            color,
             theme,
             backdrop,
             window_list,
             results,
             app_icon_size,
+            opacity,
             autostart: system::autostart_enabled(),
             powertoys: system::powertoys_run_enabled(),
             recording: false,
             focus,
             icon: Arc::new(Image::from_bytes(ImageFormat::Svg, ICON_SVG.to_vec())),
             updates: Updates::Idle,
+            picker: None,
+            // Drawn at twice its size so the rim stays sharp at 200% scale.
+            wheel: Arc::new(Image::from_bytes(
+                ImageFormat::Bmp,
+                color_wheel::wheel_bmp((WHEEL * 2.) as u32),
+            )),
+            wheel_bounds: Rc::default(),
+            bar_bounds: Rc::default(),
         };
         this.apply_theme(window, cx);
         if !welcome {
@@ -336,6 +446,313 @@ impl Settings {
                 false
             }
         }
+    }
+
+    /// Saves the dock color, then shows the saved value in the hex box and slider.
+    fn set_dock_color(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.save("dock_color", value.into(), window, cx) {
+            self.color_error = None;
+            self.sync_color_controls(window, cx);
+        }
+    }
+
+    fn sync_color_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.config.dock_color.clone();
+        let percent = opacity_percent(&value);
+        self.color.update(cx, |input, cx| input.set_value(value, window, cx));
+        self.opacity
+            .update(cx, |state, cx| state.set_value(percent, window, cx));
+    }
+
+    fn open_picker(&mut self, cx: &mut Context<Self>) {
+        if self.picker.is_some() {
+            return;
+        }
+        let rgb = config::color_parts(&self.config.dock_color).map_or(0x1E3A8A, |(rgb, _)| rgb);
+        let (h, s, v) = color_wheel::to_hsv(rgb);
+        self.picker = Some(Picker {
+            h,
+            s,
+            v,
+            original: self.config.dock_color.clone(),
+            drag: None,
+        });
+        cx.notify();
+    }
+
+    fn picker_follow_config(&mut self) {
+        if let (Some(picker), Some((rgb, _))) = (&mut self.picker, config::color_parts(&self.config.dock_color)) {
+            picker.follow(rgb);
+        }
+    }
+
+    /// Moves the picker to the pointer while a drag on the wheel or bar runs.
+    fn picker_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        match picker.drag {
+            Some(Drag::Wheel) => {
+                let b = self.wheel_bounds.get();
+                let radius = f32::from(b.size.width) / 2.;
+                if radius <= 0. {
+                    return;
+                }
+                let dx = (f32::from(position.x) - f32::from(b.origin.x)) / radius - 1.;
+                let dy = 1. - (f32::from(position.y) - f32::from(b.origin.y)) / radius;
+                (picker.h, picker.s) = color_wheel::wheel_pick(dx, dy);
+            }
+            Some(Drag::Bar) => {
+                let b = self.bar_bounds.get();
+                let travel = f32::from(b.size.width) - THUMB;
+                if travel <= 0. {
+                    return;
+                }
+                let x = f32::from(position.x) - f32::from(b.origin.x) - THUMB / 2.;
+                picker.v = (x / travel).clamp(0., 1.);
+            }
+            None => return,
+        }
+        cx.notify();
+    }
+
+    /// Ends a drag and saves the color, keeping the chosen strength.
+    fn picker_release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        if picker.drag.take().is_none() {
+            return;
+        }
+        let rgb = picker.rgb();
+        let value = match config::color_parts(&self.config.dock_color) {
+            Some((_, alpha)) if self.config.dock_color.trim().len() == 9 => format!("#{rgb:06X}{alpha:02X}"),
+            _ => format!("#{rgb:06X}"),
+        };
+        if value != self.config.dock_color {
+            self.set_dock_color(value, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_picker(&mut self, cancel: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(picker) = self.picker.take()
+            && cancel
+            && picker.original != self.config.dock_color
+        {
+            self.set_dock_color(picker.original, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// DisplaySwap-style picker: a hue and saturation wheel, a brightness bar,
+    /// a preview and Save or Cancel.
+    fn color_picker_panel(&self, picker: &Picker, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = rgb_color(picker.rgb());
+        let full = rgb_color(color_wheel::from_hsv(picker.h, picker.s, 1.));
+        let (mx, my) = color_wheel::wheel_point(picker.h, picker.s);
+        let wheel_bounds = self.wheel_bounds.clone();
+        let bar_bounds = self.bar_bounds.clone();
+        let start = |drag: Drag| {
+            cx.listener(move |this: &mut Self, event: &MouseDownEvent, _, cx| {
+                if let Some(picker) = &mut this.picker {
+                    picker.drag = Some(drag);
+                }
+                this.picker_drag(event.position, cx);
+            })
+        };
+        let wheel = div()
+            .relative()
+            .flex_none()
+            .size(px(WHEEL))
+            .cursor_crosshair()
+            .child(img(self.wheel.clone()).size(px(WHEEL)))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(WHEEL / 2. * (1. + mx) - 8.))
+                    .top(px(WHEEL / 2. * (1. + my) - 8.))
+                    .size(px(16.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(gpui_kit::white())
+                    .bg(full),
+            )
+            .on_mouse_down(MouseButton::Left, start(Drag::Wheel))
+            .on_prepaint(move |bounds, _, _| wheel_bounds.set(bounds));
+        let bar = div()
+            .relative()
+            .w(px(BAR_WIDTH))
+            .h(px(THUMB))
+            .rounded_full()
+            .cursor_pointer()
+            .border_1()
+            .border_color(p.border)
+            .bg(linear_gradient(
+                90.,
+                linear_color_stop(rgb_color(0x000000), 0.),
+                linear_color_stop(full, 1.),
+            ))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-1.))
+                    .left(px(picker.v * (BAR_WIDTH - THUMB) - 1.))
+                    .size(px(THUMB))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(gpui_kit::white())
+                    .bg(current),
+            )
+            .on_mouse_down(MouseButton::Left, start(Drag::Bar))
+            .on_prepaint(move |bounds, _, _| bar_bounds.set(bounds));
+        h_flex()
+            .id("color-picker")
+            .gap_5()
+            .items_start()
+            .p_4()
+            .rounded_md()
+            .border_1()
+            .border_color(p.border)
+            .bg(p.surface)
+            // Moves and releases are caught by the whole panel, so a drag that
+            // slips off the wheel keeps going.
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if event.dragging() {
+                    this.picker_drag(event.position, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, window, cx| this.picker_release(window, cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, window, cx| this.picker_release(window, cx)),
+            )
+            .child(wheel)
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(hint("Pick a color on the wheel, then set how bright it is.", p))
+                    .child(div().pt_2().child(hint("Brightness", p)))
+                    .child(bar)
+                    .child(
+                        h_flex()
+                            .pt_2()
+                            .gap_3()
+                            .items_center()
+                            .child(
+                                div()
+                                    .w(px(44.))
+                                    .h(px(30.))
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(p.border)
+                                    .bg(current),
+                            )
+                            .child(format!("#{:06X}", picker.rgb())),
+                    )
+                    .child(
+                        h_flex()
+                            .pt_3()
+                            .gap_2()
+                            .child(
+                                Button::new("picker-save")
+                                    .primary()
+                                    .label("Save")
+                                    .on_click(cx.listener(|this, _, window, cx| this.close_picker(false, window, cx))),
+                            )
+                            .child(
+                                Button::new("picker-cancel")
+                                    .label("Cancel")
+                                    .on_click(cx.listener(|this, _, window, cx| this.close_picker(true, window, cx))),
+                            ),
+                    ),
+            )
+    }
+
+    /// Preset swatches, your own color and a hex box. A preset keeps the opacity already chosen.
+    fn dock_color_control(&self, p: Palette, cx: &mut Context<Self>) -> Div {
+        let current = config::color_parts(&self.config.dock_color);
+        let swatches = DOCK_COLORS.iter().enumerate().map(|(index, (value, name))| {
+            let preset = config::color_parts(value);
+            let selected = match (preset, current) {
+                (None, None) => true,
+                (Some((a, _)), Some((b, _))) => a == b,
+                _ => false,
+            };
+            let value = match (preset, current) {
+                (Some((rgb, _)), Some((_, alpha))) if value.len() == 7 => format!("#{rgb:06X}{alpha:02X}"),
+                _ => (*value).to_owned(),
+            };
+            let name = *name;
+            div()
+                .id(("dock-color", index))
+                .size(px(26.))
+                .rounded_full()
+                .cursor_pointer()
+                .border_2()
+                .border_color(if selected { p.accent } else { p.border })
+                .map(|swatch| match preset {
+                    Some((rgb, _)) => swatch.bg(rgb_color(rgb)),
+                    // The theme swatch is split dark and light.
+                    None => swatch.bg(linear_gradient(
+                        135.,
+                        linear_color_stop(rgb_color(0x1C1C1C), 0.5),
+                        linear_color_stop(rgb_color(0xF3F3F3), 0.5),
+                    )),
+                })
+                .tooltip(move |window, cx| Tooltip::new(name).build(window, cx))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if value != this.config.dock_color {
+                        this.set_dock_color(value.clone(), window, cx);
+                        this.picker_follow_config();
+                    }
+                }))
+        });
+        // Your own color: the color itself when it is not a preset, else a "+".
+        let preset = DOCK_COLORS
+            .iter()
+            .any(|(value, _)| config::color_parts(value).map(|(rgb, _)| rgb) == current.map(|(rgb, _)| rgb));
+        let custom = div()
+            .id("dock-color-custom")
+            .size(px(26.))
+            .rounded_full()
+            .cursor_pointer()
+            .border_2()
+            .border_color(if !preset || self.picker.is_some() {
+                p.accent
+            } else {
+                p.border
+            })
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(p.muted)
+            .map(|swatch| match current {
+                Some((rgb, _)) if !preset => swatch.bg(rgb_color(rgb)),
+                _ => swatch.child("+"),
+            })
+            .tooltip(|window, cx| Tooltip::new("Your own color").build(window, cx))
+            .on_click(cx.listener(|this, _, _, cx| this.open_picker(cx)));
+        v_flex()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .items_center()
+                    .children(swatches)
+                    .child(custom)
+                    .child(Input::new(&self.color).aria_label("Dock color hex code").w(px(120.))),
+            )
+            .children(self.color_error.as_deref().map(|error| error_text(error, p)))
+            .children(
+                self.picker
+                    .as_ref()
+                    .map(|picker| self.color_picker_panel(picker, p, cx)),
+            )
     }
 
     fn pins_path() -> Result<std::path::PathBuf, String> {
@@ -392,6 +809,7 @@ impl Settings {
                 let app_icon_size = self.config.dock_icon_size as f32;
                 self.app_icon_size
                     .update(cx, |state, cx| state.set_value(app_icon_size, window, cx));
+                self.sync_color_controls(window, cx);
                 self.apply_theme(window, cx);
             }
             Err(error) => self.error = Some(error),
@@ -878,7 +1296,7 @@ impl Settings {
             .into_any_element()
     }
 
-    fn appearance(&self, p: Palette, _cx: &mut Context<Self>) -> AnyElement {
+    fn appearance(&self, p: Palette, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .gap_2()
             .child(label("Look", p))
@@ -896,7 +1314,35 @@ impl Settings {
                         "Acrylic and mica blur what is behind the launcher and fade in. Solid appears at once.",
                         Select::new(&self.backdrop).accessibility_label("Backdrop").w(px(160.)),
                         p,
-                    )),
+                    ))
+                    .child(divider(p))
+                    .child(
+                        item(
+                            "Dock color",
+                            "Color the dock and its popups. Text turns light or dark to stay readable. With the launcher at the bottom, the launcher takes the same color.",
+                            p,
+                        )
+                        .child(self.dock_color_control(p, cx)),
+                    )
+                    .when(!self.config.dock_color.is_empty(), |group| {
+                        group.child(divider(p)).child(if self.config.backdrop == "acrylic" {
+                            item(
+                                "Dock color strength",
+                                format!(
+                                    "{}%. Lower lets more of the blurred desktop show through.",
+                                    opacity_percent(&self.config.dock_color) as u32
+                                ),
+                                p,
+                            )
+                            .child(Slider::new(&self.opacity).accessibility_label("Dock color strength"))
+                        } else {
+                            item(
+                                "Dock color strength",
+                                "The dock is see-through only with the Acrylic backdrop. Mica and Solid show the color at full strength.",
+                                p,
+                            )
+                        })
+                    }),
             )
             .child(div().h_3())
             .child(label("Results", p))
@@ -1297,6 +1743,17 @@ fn group(p: Palette) -> Div {
 
 fn divider(p: Palette) -> Div {
     div().h(px(1.)).bg(p.border)
+}
+
+/// The color's opacity as a percentage, or the default for a color without one.
+fn opacity_percent(color: &str) -> f32 {
+    let alpha = config::color_parts(color).map_or(0x8C, |(_, alpha)| alpha);
+    ((alpha as f32 / 2.55) / 5.).round() * 5.
+}
+
+/// `0xRRGGBB` as a GPUI color.
+fn rgb_color(hex: u32) -> Hsla {
+    rgb(hex).into()
 }
 
 /// A setting whose control sits below its title.
