@@ -5,7 +5,7 @@
 <h1 align="center">Ember</h1>
 
 <p align="center">
-  <b>A development fork of <a href="https://github.com/SumirSeth/wisp">Wisp</a>.</b><br>
+  <b>My in-development fork of <a href="https://github.com/SumirSeth/wisp">Wisp</a>.</b><br>
   For everyday use, <a href="https://github.com/SumirSeth/wisp/releases/latest">download Wisp</a>.
 </p>
 
@@ -25,9 +25,9 @@ It is written in Rust with Win32 and Direct2D. It needs no .NET, web view or Pow
 
 ## About Ember
 
-Ember is where fixes and features for [Wisp](https://github.com/SumirSeth/wisp) are developed and tried out before they are offered to Wisp as pull requests. It is not a separate product and has no releases. **To use Wisp, [download it from Wisp's releases](https://github.com/SumirSeth/wisp/releases/latest).**
+Ember is my personal, in-development fork of [Wisp](https://github.com/SumirSeth/wisp). I use it to work on fixes and features, and offer the ones that fit to Wisp as pull requests. It is not affiliated with Wisp, not a separate product, and has no releases. **To use Wisp, [download it from Wisp's releases](https://github.com/SumirSeth/wisp/releases/latest).**
 
-Being worked on here:
+What I'm working on:
 
 - **Dock color**, with a color wheel in Settings and the dock's menus drawn in the color: [Wisp #72](https://github.com/SumirSeth/wisp/pull/72)
 - **The taskbar's app menu** in the dock: New window, Run as administrator, Open file location, Close window or Close all windows, and End task, plus Windows Terminal starting from a pinned icon
