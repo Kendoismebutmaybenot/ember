@@ -5,8 +5,8 @@
 <h1 align="center">Ember</h1>
 
 <p align="center">
-  <b>A taskbar replacement for Windows, built on <a href="https://github.com/SumirSeth/wisp">Wisp</a>.</b><br>
-  A dock and a launcher. One ~1.8 MB executable.
+  <b>A development fork of <a href="https://github.com/SumirSeth/wisp">Wisp</a>.</b><br>
+  For everyday use, <a href="https://github.com/SumirSeth/wisp/releases/latest">download Wisp</a>.
 </p>
 
 <p align="center">
@@ -19,21 +19,21 @@
   <img src="assets/dock-to-launcher.webp" width="700" alt="The dock slides up, then grows into the launcher">
 </p>
 
-Ember hides the taskbar and puts a dock in its place. Press <kbd>Alt</kbd>+<kbd>Space</kbd> and the dock grows into a launcher.
+Wisp hides the taskbar and puts a dock in its place. Press <kbd>Alt</kbd>+<kbd>Space</kbd> and the dock grows into a launcher.
 
 It is written in Rust with Win32 and Direct2D. It needs no .NET, web view or PowerToys.
 
 ## About Ember
 
-Ember is a fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp). Upstream Wisp aims to be a slim, fast dock and launcher, and says plainly that it is not a full taskbar replacement. Ember goes the other way: it aims to replace the taskbar side of Windows Explorer, so you can hide the taskbar and not miss it. It keeps Wisp's speed and adds what people reach for the taskbar to do:
+Ember is where fixes and features for [Wisp](https://github.com/SumirSeth/wisp) are developed and tried out before they are offered to Wisp as pull requests. It is not a separate product and has no releases. **To use Wisp, [download it from Wisp's releases](https://github.com/SumirSeth/wisp/releases/latest).**
 
-- **The taskbar's app menu.** Right-click a dock app for New window, Run as administrator, Open file location, Pin, Close window or Close all windows, and End task to force-close an app that stopped responding.
-- **Pin anything.** Pin apps that aren't running straight from the launcher: right-click a result, or press <kbd>Ctrl</kbd>+<kbd>P</kbd>.
-- **Your colors.** Give the dock any color in Settings > Appearance, from presets, a hex code or a color wheel. Text stays readable, and the dock's menus and the bottom launcher match it.
+Being worked on here:
 
-Features that suit upstream are offered back as pull requests, starting with the dock color ([#60](https://github.com/SumirSeth/wisp/issues/60)).
+- **Dock color**, with a color wheel in Settings and the dock's menus drawn in the color: [Wisp #72](https://github.com/SumirSeth/wisp/pull/72)
+- **The taskbar's app menu** in the dock: New window, Run as administrator, Open file location, Close window or Close all windows, and End task, plus Windows Terminal starting from a pinned icon
+- **Pinning from the launcher**: right-click a result, or press <kbd>Ctrl</kbd>+<kbd>P</kbd>
 
-The releases and the Update button in Settings install **upstream** Wisp, which replaces Ember's features. Build Ember from source instead (see [Contributing](CONTRIBUTING.md)): `cargo build --release --workspace`, then copy `ember.exe` and `ember-settings.exe` from `target\release`.
+To try a change before it reaches Wisp, build Ember from source: `cargo build --release --workspace`, then run `ember.exe` with `ember-settings.exe` beside it. It uses Wisp's settings folder.
 
 ## Install
 
