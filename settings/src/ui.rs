@@ -418,9 +418,9 @@ impl Settings {
         let title = if self.onboarding.is_some() {
             "Welcome to Wisp"
         } else if crate::channel::NIGHTLY {
-            "Wisp Nightly Settings"
+            "Ember Nightly Settings"
         } else {
-            "Wisp Settings"
+            "Ember Settings"
         };
         system::style_title_bar(title, dark, background, text);
     }
@@ -1405,7 +1405,7 @@ impl Settings {
                     ))
                     .child(divider(p))
                     .child(
-                        item("Web search URL", "Wisp replaces {query} with your search text.", p)
+                        item("Web search URL", "Ember replaces {query} with your search text.", p)
                             .child(Input::new(&self.url).aria_label("Web search URL"))
                             .children(self.url_error.as_ref().map(|e| error_text(e, p))),
                     ),
@@ -1535,7 +1535,7 @@ impl Settings {
                             .px_2()
                             .pb_4()
                             .child(img(self.icon.clone()).size(px(22.)))
-                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("wisp")),
+                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("ember")),
                     )
                     .children(
                         Page::ALL

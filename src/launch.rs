@@ -75,7 +75,7 @@ pub fn settings(welcome: bool) -> Result<()> {
                     w!(
                         "Settings and updates need wisp-settings.exe beside wisp.exe. Both come in the release zip.\n\nOpen the download page?"
                     ),
-                    w!("Wisp Settings"),
+                    w!("Ember Settings"),
                     MB_YESNO | MB_ICONINFORMATION,
                 )
             };

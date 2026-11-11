@@ -265,9 +265,9 @@ impl Library {
             .map(|(index, spec)| {
                 // Says it is Wisp's own panel, since a Settings page often has the same title.
                 let subtitle = if spec.description.is_empty() {
-                    "Wisp panel".to_string()
+                    "Ember panel".to_string()
                 } else {
-                    format!("Wisp panel · {}", spec.description)
+                    format!("Ember panel · {}", spec.description)
                 };
                 ResultItem::new(Kind::Command, spec.title.clone(), subtitle, Action::Surface(index))
                     .glyph(GLYPH)

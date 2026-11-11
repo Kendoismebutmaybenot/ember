@@ -927,8 +927,8 @@ mod tests {
         assert_eq!(titles("restart", &state), ["Restart"]);
         assert_eq!(titles("shut", &state), ["Shut down"]);
         assert!(titles("re", &state).is_empty());
-        assert_eq!(titles("quit", &state), ["Quit Wisp"]);
-        assert_eq!(titles("exit wi", &state), ["Quit Wisp"]);
+        assert_eq!(titles("quit", &state), ["Quit Ember"]);
+        assert_eq!(titles("exit em", &state), ["Quit Ember"]);
         assert_eq!(search("lock", &state)[0].subtitle, "Locks the PC");
         assert_eq!(
             search("restart", &state)[0].subtitle,

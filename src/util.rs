@@ -46,6 +46,6 @@ pub fn copy_wide(dst: &mut [u16], s: &str) {
 
 pub fn error_box(message: &str) {
     unsafe {
-        MessageBoxW(None, &HSTRING::from(message), w!("Wisp"), MB_OK | MB_ICONERROR);
+        MessageBoxW(None, &HSTRING::from(message), w!("Ember"), MB_OK | MB_ICONERROR);
     }
 }

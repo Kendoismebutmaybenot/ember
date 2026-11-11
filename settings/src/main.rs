@@ -43,7 +43,7 @@ fn main() {
             let (title, width, height) = if welcome {
                 ("Welcome to Wisp", 560., 460.)
             } else {
-                ("Wisp Settings", 820., 580.)
+                ("Ember Settings", 820., 580.)
             };
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

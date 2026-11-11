@@ -1,18 +1,17 @@
 <p align="center">
-  <img src="assets/icon.svg" width="96" height="96" alt="Wisp logo">
+  <img src="assets/icon.svg" width="96" height="96" alt="Ember logo">
 </p>
 
-<h1 align="center">Wisp</h1>
+<h1 align="center">Ember</h1>
 
 <p align="center">
-  <b>A dock and a launcher for Windows.</b><br>
-  Replaces the taskbar. One ~1.5 MB executable.
+  <b>A taskbar replacement for Windows, built on <a href="https://github.com/SumirSeth/wisp">Wisp</a>.</b><br>
+  A dock and a launcher. One ~1.6 MB executable.
 </p>
 
 <p align="center">
-  <a href="https://github.com/SumirSeth/wisp/releases/latest"><img src="https://img.shields.io/github/v/release/SumirSeth/wisp?style=flat-square&color=0891b2" alt="Latest release"></a>
-  <a href="https://github.com/SumirSeth/wisp/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/SumirSeth/wisp/ci.yml?branch=main&style=flat-square" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/SumirSeth/wisp?style=flat-square" alt="MIT license"></a>
+  <a href="https://github.com/SumirSeth/wisp"><img src="https://img.shields.io/badge/based%20on-Wisp-0891b2?style=flat-square" alt="Based on Wisp"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-ef4444?style=flat-square" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2011-0078d4?style=flat-square" alt="Windows 11">
 </p>
 
@@ -20,13 +19,13 @@
   <img src="assets/dock-to-launcher.webp" width="700" alt="The dock slides up, then grows into the launcher">
 </p>
 
-Wisp hides the taskbar and puts a dock in its place. Press <kbd>Alt</kbd>+<kbd>Space</kbd> and the dock grows into a launcher.
+Ember hides the taskbar and puts a dock in its place. Press <kbd>Alt</kbd>+<kbd>Space</kbd> and the dock grows into a launcher.
 
 It is written in Rust with Win32 and Direct2D. It needs no .NET, web view or PowerToys.
 
-## About this fork
+## About Ember
 
-This is a fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp). Upstream Wisp aims to be a slim, fast dock and launcher, and says plainly that it is not a full taskbar replacement. This fork goes the other way: it aims to replace the taskbar side of Windows Explorer, so you can hide the taskbar and not miss it. It keeps Wisp's speed and adds what people reach for the taskbar to do:
+Ember is a fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp). Upstream Wisp aims to be a slim, fast dock and launcher, and says plainly that it is not a full taskbar replacement. Ember goes the other way: it aims to replace the taskbar side of Windows Explorer, so you can hide the taskbar and not miss it. It keeps Wisp's speed and adds what people reach for the taskbar to do:
 
 - **The taskbar's app menu.** Right-click a dock app for New window, Run as administrator, Open file location, Pin, Close window or Close all windows, and End task to force-close an app that stopped responding.
 - **Pin anything.** Pin apps that aren't running straight from the launcher: right-click a result, or press <kbd>Ctrl</kbd>+<kbd>P</kbd>.
@@ -34,7 +33,7 @@ This is a fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp). Upstream 
 
 Features that suit upstream are offered back as pull requests, starting with the dock color ([#60](https://github.com/SumirSeth/wisp/issues/60)).
 
-The releases and the Update button in Settings install **upstream** Wisp, which replaces this fork's features. Build this fork from source instead (see [Contributing](CONTRIBUTING.md)): `cargo build --release --workspace`, then copy `wisp.exe` and `wisp-settings.exe` from `target\release`.
+The releases and the Update button in Settings install **upstream** Wisp, which replaces Ember's features. Build Ember from source instead (see [Contributing](CONTRIBUTING.md)): `cargo build --release --workspace`, then copy `wisp.exe` and `wisp-settings.exe` from `target\release`.
 
 ## Install
 

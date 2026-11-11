@@ -34,6 +34,6 @@ fn main() {
         return;
     }
     if let Err(e) = app::run() {
-        util::error_box(&format!("Wisp could not start:\n{}", e.message()));
+        util::error_box(&format!("Ember could not start:\n{}", e.message()));
     }
 }

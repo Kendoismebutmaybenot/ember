@@ -4,7 +4,7 @@
 use windows::core::{PCWSTR, w};
 
 pub const NIGHTLY: bool = cfg!(feature = "nightly");
-pub const NAME: &str = if NIGHTLY { "Wisp Nightly" } else { "Wisp" };
+pub const NAME: &str = if NIGHTLY { "Ember Nightly" } else { "Ember" };
 /// Folder under `%APPDATA%`.
 pub const DATA_DIR: &str = if NIGHTLY { "wisp-nightly" } else { "wisp" };
 pub const LAUNCHER_CLASS: PCWSTR = if NIGHTLY {
