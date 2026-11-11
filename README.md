@@ -24,6 +24,18 @@ Wisp hides the taskbar and puts a dock in its place. Press <kbd>Alt</kbd>+<kbd>S
 
 It is written in Rust with Win32 and Direct2D. It needs no .NET, web view or PowerToys.
 
+## About this fork
+
+This is a fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp). Upstream Wisp aims to be a slim, fast dock and launcher, and says plainly that it is not a full taskbar replacement. This fork goes the other way: it aims to replace the taskbar side of Windows Explorer, so you can hide the taskbar and not miss it. It keeps Wisp's speed and adds what people reach for the taskbar to do:
+
+- **The taskbar's app menu.** Right-click a dock app for New window, Run as administrator, Open file location, Pin, Close window or Close all windows, and End task to force-close an app that stopped responding.
+- **Pin anything.** Pin apps that aren't running straight from the launcher: right-click a result, or press <kbd>Ctrl</kbd>+<kbd>P</kbd>.
+- **Your colors.** Give the dock any color in Settings > Appearance, from presets, a hex code or a color wheel. Text stays readable, and the dock's menus and the bottom launcher match it.
+
+Features that suit upstream are offered back as pull requests, starting with the dock color ([#60](https://github.com/SumirSeth/wisp/issues/60)).
+
+The releases and the Update button in Settings install **upstream** Wisp, which replaces this fork's features. Build this fork from source instead (see [Contributing](CONTRIBUTING.md)): `cargo build --release --workspace`, then copy `wisp.exe` and `wisp-settings.exe` from `target\release`.
+
 ## Install
 
 1. Download `wisp-vX-x86_64-windows.zip` from the [latest release](https://github.com/SumirSeth/wisp/releases/latest).
