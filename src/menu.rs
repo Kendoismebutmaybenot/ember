@@ -78,6 +78,8 @@ struct Active {
     items: Vec<Item>,
     font: HFONT,
     brush: HBRUSH,
+    /// Whether the menu window's border already took the color.
+    bordered: std::cell::Cell<bool>,
 }
 
 thread_local! {
@@ -151,6 +153,7 @@ unsafe fn prepare(menu: HMENU, style: Style) {
                 items,
                 font: menu_font(style.dpi),
                 brush,
+                bordered: std::cell::Cell::new(false),
             })
         });
     }
@@ -180,7 +183,12 @@ fn menu_font(dpi: u32) -> HFONT {
 }
 
 /// Measures and draws owner-drawn menu items. Returns None for other messages.
-pub fn handle(msg: u32, _wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+pub fn handle(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    if msg == WM_ENTERIDLE && wparam.0 == MSGF_MENU as usize {
+        recolor_border(HWND(lparam.0 as _));
+        // Idle notices still reach the window's own handler.
+        return None;
+    }
     if msg != WM_MEASUREITEM && msg != WM_DRAWITEM {
         return None;
     }
@@ -206,6 +214,28 @@ pub fn handle(msg: u32, _wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         }
         Some(LRESULT(1))
     })
+}
+
+/// Windows 11 outlines every menu in a light border. A menu's owner learns
+/// the menu's window only from WM_ENTERIDLE, so the border takes the dock
+/// color the first time that arrives.
+fn recolor_border(menu: HWND) {
+    use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DwmSetWindowAttribute};
+    ACTIVE.with(|cell| {
+        let Ok(active) = cell.try_borrow() else {
+            return;
+        };
+        let Some(active) = active.as_ref() else {
+            return;
+        };
+        if active.bordered.replace(true) {
+            return;
+        }
+        let color = active.style.background;
+        unsafe {
+            let _ = DwmSetWindowAttribute(menu, DWMWA_BORDER_COLOR, (&raw const color).cast(), 4);
+        }
+    });
 }
 
 unsafe fn measure_item(active: &Active, item: &Item, measure: &mut MEASUREITEMSTRUCT) {
