@@ -62,6 +62,11 @@ const WM_CLOSE_FLYOUT: u32 = WM_APP + 24;
 /// Shows a notification icon's tooltip after a short hover.
 const TIP_TIMER: usize = 104;
 const TIP_MS: u32 = 450;
+/// App menu commands added beside Pin (1), Close (2) and Unpin all (3).
+const MENU_NEW_WINDOW: usize = 10;
+const MENU_ADMIN: usize = 11;
+const MENU_LOCATION: usize = 12;
+const MENU_END_TASK: usize = 13;
 /// Tooltips wrap past this width, in DIPs.
 const TIP_MAX: f32 = 320.0;
 /// Lists an app's windows after the same hover, and hides it once the pointer
@@ -2167,17 +2172,28 @@ impl State {
                     eprintln!("Dock activation: {error}");
                 }
             } else {
-                let result = if self.apps.iter().any(|app| app.id == item.app.id) {
-                    crate::launch::app(&item.app.id, item.app.path.as_deref(), false)
-                } else if let Some(path) = &item.app.path {
-                    crate::launch::open(path)
-                } else {
-                    crate::launch::app(&item.app.id, None, false)
-                };
-                if let Err(error) = result {
-                    eprintln!("Dock launch: {error}");
-                }
+                self.launch(&item.app, false);
             }
+        }
+    }
+
+    /// Starts `app`, or another instance of it, as clicking it in Start would.
+    fn launch(&self, app: &AppEntry, admin: bool) {
+        let result = if self.apps.iter().any(|known| known.id == app.id) {
+            crate::launch::app(&app.id, app.path.as_deref(), admin)
+        } else if let Some(path) = &app.path {
+            if admin {
+                crate::launch::app(&app.id, Some(path), true)
+            } else {
+                crate::launch::open(path)
+            }
+        } else {
+            crate::launch::app(&app.id, None, admin)
+        };
+        if let Err(error) = result
+            && !crate::launch::is_cancelled(&error)
+        {
+            eprintln!("Dock launch: {error}");
         }
     }
 
@@ -2186,12 +2202,40 @@ impl State {
             return;
         };
         let windows: Vec<_> = item.windows.iter().map(|window| window.hwnd).collect();
-        let id = item.app.id.clone();
+        let app = item.app.clone();
+        let id = app.id.clone();
         let pinned = self.pinned.iter().any(|pin| pin.id.eq_ignore_ascii_case(&id));
+        // The file to reveal: the app's own path, else the running program's.
+        let location = app
+            .path
+            .clone()
+            .filter(|path| path.contains('\\'))
+            .or_else(|| item.windows.iter().map(|w| w.exe.clone()).find(|exe| !exe.is_empty()));
+        // A desktop program can run elevated; a Store app cannot.
+        let elevatable = location.as_deref().is_some_and(|path| {
+            let lower = path.to_ascii_lowercase();
+            lower.ends_with(".exe") || lower.ends_with(".lnk")
+        });
+        let mut pids: Vec<u32> = windows.iter().map(|&hwnd| open_windows::content_pid(hwnd)).collect();
+        pids.sort_unstable();
+        pids.dedup();
+        let shell = pids.iter().any(|&pid| open_windows::is_shell_process(pid));
+        let endable = !pids.is_empty() && !shell;
         unsafe {
             let Ok(menu) = CreatePopupMenu() else {
                 return;
             };
+            let enabled = |on: bool| MF_STRING | if on { MF_ENABLED } else { MF_GRAYED };
+            // Same order as the Windows taskbar: start, pin, then close.
+            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_WINDOW, w!("New window"));
+            let _ = AppendMenuW(menu, enabled(elevatable), MENU_ADMIN, w!("Run as administrator"));
+            let _ = AppendMenuW(
+                menu,
+                enabled(location.is_some()),
+                MENU_LOCATION,
+                w!("Open file location"),
+            );
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(
                 menu,
                 MF_STRING,
@@ -2205,11 +2249,26 @@ impl State {
             if pinned {
                 let _ = AppendMenuW(menu, MF_STRING, 3, w!("Unpin all"));
             }
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(
                 menu,
-                MF_STRING | if windows.is_empty() { MF_GRAYED } else { MF_ENABLED },
+                enabled(!windows.is_empty()),
                 2,
-                w!("Close window(s)"),
+                if windows.len() > 1 {
+                    w!("Close all windows")
+                } else {
+                    w!("Close window")
+                },
+            );
+            let _ = AppendMenuW(
+                menu,
+                enabled(endable),
+                MENU_END_TASK,
+                if shell {
+                    w!("End task (not for File Explorer)")
+                } else {
+                    w!("End task")
+                },
             );
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
@@ -2235,6 +2294,25 @@ impl State {
                 for hwnd in windows {
                     let _ = open_windows::close(hwnd);
                 }
+            } else if command == MENU_NEW_WINDOW as i32 {
+                self.launch(&app, false);
+            } else if command == MENU_ADMIN as i32 {
+                self.launch(&app, true);
+            } else if command == MENU_LOCATION as i32
+                && let Some(path) = &location
+                && let Err(error) = crate::launch::reveal(path)
+            {
+                eprintln!("Dock open file location: {error}");
+            } else if command == MENU_END_TASK as i32
+                && let Err(error) = open_windows::end_task(&pids)
+            {
+                // Usually an app running as administrator, which Wisp cannot end.
+                crate::tray::notify(
+                    self.owner,
+                    &format!("Could not end {}", app.name),
+                    &format!("{error} Apps running as administrator need Task Manager."),
+                    true,
+                );
             }
         }
         self.refresh();

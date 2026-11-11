@@ -13,6 +13,7 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 - Choose the dock's color in Settings > Appearance: presets including pure black, a hex box, or your own color from a color wheel. Text turns light or dark to stay readable, and with Acrylic a strength slider sets how much blur shows through. (#60)
 - Pin apps to the dock: right-click an app and choose Pin to dock. Pinned apps stay in the dock, before running apps, and start with a click. (#54, by @SorbetMango, fixes #31)
 - Pin an app that isn't running from the launcher: right-click it in the results, or press Ctrl+P. Pinned apps say so in the results.
+- Right-click a dock app for what the taskbar offers: New window, Run as administrator, Open file location, Close window or Close all windows, and End task to force-close an app that stopped responding.
 - Apps with more than one window open show a second dot under their dock icon. (#55)
 - The autohide dock starts to slide in sooner when you move the pointer to the bottom edge. (#25, by @RayTrunk, fixes #20)
 

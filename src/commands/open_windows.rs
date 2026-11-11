@@ -5,7 +5,8 @@ use windows::{
         Foundation::{CloseHandle, HWND, LPARAM, WPARAM},
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         System::Threading::{
-            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+            QueryFullProcessImageNameW, TerminateProcess,
         },
         UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_ESCAPE, keybd_event},
         UI::WindowsAndMessaging::*,
@@ -189,6 +190,63 @@ fn dismiss_shell_flyout(foreground: HWND) -> bool {
 /// Asks the window to close, as its close button does.
 pub fn close(hwnd: isize) -> Result<(), String> {
     unsafe { PostMessageW(Some(HWND(hwnd as _)), WM_CLOSE, WPARAM(0), LPARAM(0)).map_err(|error| error.message()) }
+}
+
+/// The process that draws the window's content. A Microsoft Store app's
+/// window belongs to the shared ApplicationFrameHost; the app's own process
+/// owns the `Windows.UI.Core.CoreWindow` inside it.
+pub fn content_pid(hwnd: isize) -> u32 {
+    unsafe extern "system" fn core_window(child: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let mut class = [0u16; 64];
+            let len = GetClassNameW(child, &mut class);
+            if String::from_utf16_lossy(&class[..len.max(0) as usize]) == "Windows.UI.Core.CoreWindow" {
+                let mut pid = 0;
+                GetWindowThreadProcessId(child, Some(&mut pid));
+                *(lparam.0 as *mut u32) = pid;
+                return false.into();
+            }
+            true.into()
+        }
+    }
+    let hwnd = HWND(hwnd as _);
+    let mut pid = 0;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if program_name(&process_path(pid)).eq_ignore_ascii_case("ApplicationFrameHost") {
+            let mut inner = 0u32;
+            let _ = EnumChildWindows(Some(hwnd), Some(core_window), LPARAM(&raw mut inner as isize));
+            // A suspended or minimized Store app may have no CoreWindow; never end the host itself.
+            return inner;
+        }
+    }
+    pid
+}
+
+/// Whether ending this process would take the desktop with it.
+pub fn is_shell_process(pid: u32) -> bool {
+    pid == 0 || pid == std::process::id() || program_name(&process_path(pid)).eq_ignore_ascii_case("explorer")
+}
+
+/// Force-closes processes, as Task Manager's End task does. Unsaved work is lost.
+pub fn end_task(pids: &[u32]) -> Result<(), String> {
+    let mut first_error = None;
+    for &pid in pids {
+        if is_shell_process(pid) {
+            continue;
+        }
+        let result = unsafe {
+            OpenProcess(PROCESS_TERMINATE, false, pid).and_then(|process| {
+                let ended = TerminateProcess(process, 1);
+                let _ = CloseHandle(process);
+                ended
+            })
+        };
+        if let Err(error) = result {
+            first_error.get_or_insert(error.message());
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 /// The program's name from its path: `C:\…\Code.exe` → "Code".
