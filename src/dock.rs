@@ -1965,16 +1965,13 @@ impl State {
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
             let _ = SetForegroundWindow(self.hwnd);
-            let command = TrackPopupMenu(
+            let command = crate::menu::track(
                 menu,
-                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                point.x,
-                point.y,
-                None,
+                crate::menu::Style::new(&self.palette, self.tint, self.dpi),
+                TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                (point.x, point.y),
                 self.hwnd,
-                None,
-            )
-            .0;
+            );
             let _ = DestroyMenu(menu);
             match command {
                 1 => {
@@ -2274,16 +2271,13 @@ impl State {
             let _ = GetCursorPos(&mut point);
             // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy.
             let _ = SetForegroundWindow(self.hwnd);
-            let command = TrackPopupMenu(
+            let command = crate::menu::track(
                 menu,
-                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                point.x,
-                point.y,
-                None,
+                crate::menu::Style::new(&self.palette, self.tint, self.dpi),
+                TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                (point.x, point.y),
                 self.hwnd,
-                None,
-            )
-            .0;
+            );
             let _ = DestroyMenu(menu);
             if command == 1 {
                 self.toggle_pin(&id);
@@ -2621,6 +2615,10 @@ unsafe extern "system" fn window_event(
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // Menus are drawn while the dock's state is borrowed by their modal loop.
+    if let Some(result) = crate::menu::handle(msg, wp, lp) {
+        return result;
+    }
     unsafe {
         if msg == WM_NCCREATE {
             let create = &*(lp.0 as *const CREATESTRUCTW);

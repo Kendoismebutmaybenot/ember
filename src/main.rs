@@ -17,6 +17,7 @@ mod indexer;
 #[allow(dead_code)]
 mod install;
 mod launch;
+mod menu;
 mod morph;
 mod render;
 mod search;

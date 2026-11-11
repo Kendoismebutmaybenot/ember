@@ -2265,7 +2265,7 @@ fn loword(v: usize) -> u32 {
 }
 
 /// Shows "Pin to dock" or "Unpin from dock" at the pointer. Returns whether it was chosen.
-fn pin_menu(hwnd: HWND, pinned: bool) -> bool {
+fn pin_menu(hwnd: HWND, pinned: bool, style: Option<crate::menu::Style>) -> bool {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else {
             return false;
@@ -2278,16 +2278,7 @@ fn pin_menu(hwnd: HWND, pinned: bool) -> bool {
         let _ = AppendMenuW(menu, MF_STRING, 1, label);
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
-        let command = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-            point.x,
-            point.y,
-            None,
-            hwnd,
-            None,
-        )
-        .0;
+        let command = crate::menu::track(menu, style, TPM_NONOTIFY | TPM_RIGHTBUTTON, (point.x, point.y), hwnd);
         let _ = DestroyMenu(menu);
         command == 1
     }
@@ -2344,6 +2335,10 @@ fn run_drag(hwnd: HWND, payload: Payload) {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // The dock's menus land here when it shares the launcher's window.
+    if let Some(result) = crate::menu::handle(msg, wparam, lparam) {
+        return result;
+    }
     if DRAGGING.with(Cell::get)
         && matches!(
             msg,
@@ -2625,8 +2620,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_RBUTTONUP => {
             let (x, y) = mouse_pos(lparam);
             // Release the launcher borrow before the menu's modal loop handles messages.
-            if let Some(Some((app, pinned))) = with_launcher(|l| l.pin_target_at(x, y))
-                && pin_menu(hwnd, pinned)
+            if let Some((Some((app, pinned)), style)) = with_launcher(|l| {
+                let style = crate::menu::Style::new(&l.palette, l.config.dock_tint().filter(|_| l.unified()), l.dpi);
+                (l.pin_target_at(x, y), style)
+            }) && pin_menu(hwnd, pinned, style)
             {
                 with_launcher(|l| l.toggle_pin(&app));
             }

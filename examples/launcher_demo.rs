@@ -25,6 +25,8 @@ mod indexer;
 mod install;
 #[path = "../src/launch.rs"]
 mod launch;
+#[path = "../src/menu.rs"]
+mod menu;
 #[path = "../src/morph.rs"]
 mod morph;
 #[path = "../src/render.rs"]
