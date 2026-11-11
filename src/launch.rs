@@ -55,11 +55,11 @@ pub fn reveal(path: &str) -> Result<()> {
     )
 }
 
-/// Starts `wisp-settings.exe` from the folder that contains `wisp.exe`.
+/// Starts `ember-settings.exe` from the folder that contains `ember.exe`.
 /// Offers the release download if the settings app is not there.
 pub fn settings(welcome: bool) -> Result<()> {
     let exe = std::env::current_exe().map_err(|e| windows::core::Error::new(E_FAIL, e.to_string()))?;
-    let settings = exe.with_file_name("wisp-settings.exe");
+    let settings = exe.with_file_name("ember-settings.exe");
     if !settings.is_file() {
         // One dialog at a time, however often Settings is chosen.
         static ASKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -73,14 +73,14 @@ pub fn settings(welcome: bool) -> Result<()> {
                 MessageBoxW(
                     None,
                     w!(
-                        "Settings and updates need wisp-settings.exe beside wisp.exe. Both come in the release zip.\n\nOpen the download page?"
+                        "Settings and updates need ember-settings.exe beside ember.exe. Both come in the release zip.\n\nOpen the download page?"
                     ),
                     w!("Ember Settings"),
                     MB_YESNO | MB_ICONINFORMATION,
                 )
             };
             if answer == IDYES
-                && let Err(error) = open("https://github.com/SumirSeth/wisp/releases/latest")
+                && let Err(error) = open("https://github.com/Kendoismebutmaybenot/ember/releases/latest")
             {
                 crate::util::error_box(&format!("Could not open the download page: {}", error.message()));
             }

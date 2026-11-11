@@ -31,7 +31,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             let scoop = std::env::var_os("SCOOP").map(PathBuf::from);
             let launcher = crate::install::autostart_path(&launcher, scoop.as_deref());
             if !launcher.is_file() {
-                return Err("Place wisp.exe next to wisp-settings.exe, then try again.".into());
+                return Err("Place ember.exe next to ember-settings.exe, then try again.".into());
             }
             let command = wide(format!("\"{}\"", launcher.display()));
             RegSetKeyValueW(
@@ -59,7 +59,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
 fn launcher_path(settings_exe: &Path) -> Result<PathBuf, String> {
     settings_exe
         .parent()
-        .map(|parent| parent.join("wisp.exe"))
+        .map(|parent| parent.join("ember.exe"))
         .ok_or_else(|| "Cannot find the Wisp folder.".into())
 }
 
@@ -194,8 +194,8 @@ mod tests {
     #[test]
     fn autostart_targets_launcher_beside_settings() {
         assert_eq!(
-            launcher_path(Path::new(r"C:\Program Files\Wisp\wisp-settings.exe")).unwrap(),
-            PathBuf::from(r"C:\Program Files\Wisp\wisp.exe")
+            launcher_path(Path::new(r"C:\Program Files\Ember\ember-settings.exe")).unwrap(),
+            PathBuf::from(r"C:\Program Files\Ember\ember.exe")
         );
     }
 }

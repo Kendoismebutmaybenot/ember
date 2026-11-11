@@ -25,7 +25,7 @@
 param(
     # Measure only the launcher under test, for example when PowerToys Run is turned off.
     [switch]$SkipPowerToys,
-    [string]$Process = "wisp",
+    [string]$Process = "ember",
     [string]$Hotkey = "Ctrl+Alt+F9",
     [string]$PowerToysHotkey = "Alt+Space",
     [int]$Trials = 20,

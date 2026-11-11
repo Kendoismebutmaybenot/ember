@@ -5,6 +5,11 @@ edition = "2024"
 description = "Settings and onboarding for Wisp"
 license = "MIT"
 publish = false
+autobins = false
+
+[[bin]]
+name = "ember-settings"
+path = "src/main.rs"
 
 [features]
 # Side-by-side build with its own data folder and window names.

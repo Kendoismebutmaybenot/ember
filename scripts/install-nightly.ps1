@@ -14,13 +14,13 @@ if (-not $NoBuild) {
     if ($LASTEXITCODE) { throw "cargo build failed ($LASTEXITCODE)" }
 }
 
-$exe = Join-Path $dir 'wisp.exe'
+$exe = Join-Path $dir 'ember.exe'
 if (Test-Path $exe) {
     & $exe --quit
     Start-Sleep -Seconds 2
 }
 New-Item -ItemType Directory -Force $dir | Out-Null
-foreach ($file in 'wisp.exe', 'wisp-settings.exe') {
+foreach ($file in 'ember.exe', 'ember-settings.exe') {
     Copy-Item (Join-Path $target "release\$file") (Join-Path $dir $file) -Force
 }
 

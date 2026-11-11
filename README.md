@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>A taskbar replacement for Windows, built on <a href="https://github.com/SumirSeth/wisp">Wisp</a>.</b><br>
-  A dock and a launcher. One ~1.6 MB executable.
+  A dock and a launcher. One ~1.8 MB executable.
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@ Ember is a fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp). Upstream
 
 Features that suit upstream are offered back as pull requests, starting with the dock color ([#60](https://github.com/SumirSeth/wisp/issues/60)).
 
-The releases and the Update button in Settings install **upstream** Wisp, which replaces Ember's features. Build Ember from source instead (see [Contributing](CONTRIBUTING.md)): `cargo build --release --workspace`, then copy `wisp.exe` and `wisp-settings.exe` from `target\release`.
+The releases and the Update button in Settings install **upstream** Wisp, which replaces Ember's features. Build Ember from source instead (see [Contributing](CONTRIBUTING.md)): `cargo build --release --workspace`, then copy `ember.exe` and `ember-settings.exe` from `target\release`.
 
 ## Install
 

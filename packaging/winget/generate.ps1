@@ -13,8 +13,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $version = $Tag.Substring(1)
-$repo = 'https://github.com/SumirSeth/wisp'
-$url = "$repo/releases/download/$Tag/wisp-$Tag-x86_64-windows.zip"
+$repo = 'https://github.com/Kendoismebutmaybenot/ember'
+$url = "$repo/releases/download/$Tag/ember-$Tag-x86_64-windows.zip"
 $sha256 = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash
 
 # Old releases have a versioned top folder. Inspect exact entries rather than
@@ -22,10 +22,10 @@ $sha256 = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash
 $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ZipPath))
 try {
     $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    $folder = "wisp-$Tag-x86_64-windows"
-    if ('wisp.exe' -cin $entries -and 'wisp-settings.exe' -cin $entries) {
+    $folder = "ember-$Tag-x86_64-windows"
+    if ('ember.exe' -cin $entries -and 'ember-settings.exe' -cin $entries) {
         $prefix = ''
-    } elseif ("$folder/wisp.exe" -cin $entries -and "$folder/wisp-settings.exe" -cin $entries) {
+    } elseif ("$folder/ember.exe" -cin $entries -and "$folder/ember-settings.exe" -cin $entries) {
         $prefix = "$folder\"
     } else {
         throw 'The zip must contain both executables at its root or in its release folder.'
@@ -77,10 +77,10 @@ MinimumOSVersion: 10.0.19041.0
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
-- RelativeFilePath: ${prefix}wisp.exe
+- RelativeFilePath: ${prefix}ember.exe
   PortableCommandAlias: wisp
-- RelativeFilePath: ${prefix}wisp-settings.exe
-  PortableCommandAlias: wisp-settings
+- RelativeFilePath: ${prefix}ember-settings.exe
+  PortableCommandAlias: ember-settings
 Installers:
 - Architecture: x64
   InstallerUrl: $url

@@ -165,6 +165,8 @@ pub fn run() -> Result<()> {
         if flag("--quit") {
             return Ok(());
         }
+        // wisp.exe became ember.exe: keep Start with Windows pointing at a real file.
+        system::repair_autostart();
 
         let renderer = Renderer::new()?;
         let system_dpi = GetDpiForSystem();

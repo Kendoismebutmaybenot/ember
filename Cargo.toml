@@ -7,8 +7,14 @@ license = "MIT"
 authors = ["Sumir Seth"]
 repository = "https://github.com/SumirSeth/wisp"
 readme = "README.md"
+autobins = false
 keywords = ["dock", "launcher", "taskbar", "windows", "productivity"]
 categories = ["command-line-utilities"]
+
+# The package keeps its upstream name; the program is Ember.
+[[bin]]
+name = "ember"
+path = "src/main.rs"
 
 [workspace]
 members = ["settings"]

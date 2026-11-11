@@ -86,6 +86,44 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
     }
 }
 
+/// Points an existing Start with Windows entry at this program when the file
+/// it names is gone, as after `wisp.exe` became `ember.exe` or the folder moved.
+/// Without an entry it does nothing, so it never turns autostart on.
+pub fn repair_autostart() {
+    let mut buffer = [0u16; 1024];
+    let mut size = (buffer.len() * 2) as u32;
+    let found = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            RUN_VALUE,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+        .is_ok()
+    };
+    if !found {
+        return;
+    }
+    let command = String::from_utf16_lossy(&buffer[..(size as usize / 2)]);
+    if !std::path::Path::new(command_path(&command)).is_file()
+        && let Err(error) = set_autostart(true)
+    {
+        eprintln!("Start with Windows: {error}");
+    }
+}
+
+/// The program in a Run command such as `"C:\Apps\ember.exe" --flag`.
+fn command_path(command: &str) -> &str {
+    let command = command.trim_end_matches('\0').trim();
+    match command.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest),
+        None => command.split(' ').next().unwrap_or(command),
+    }
+}
+
 pub fn system_uses_light_theme() -> bool {
     let mut value = 0u32;
     let mut size = size_of::<u32>() as u32;
@@ -101,4 +139,22 @@ pub fn system_uses_light_theme() -> bool {
         )
     };
     result.is_ok() && value != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_path;
+
+    #[test]
+    fn reads_the_program_from_a_run_command() {
+        assert_eq!(
+            command_path("\"C:\\Apps\\Ember\\wisp.exe\"\0"),
+            r"C:\Apps\Ember\wisp.exe"
+        );
+        assert_eq!(
+            command_path(r#""C:\Program Files\Ember\ember.exe" --tray"#),
+            r"C:\Program Files\Ember\ember.exe"
+        );
+        assert_eq!(command_path(r"C:\Apps\ember.exe --tray"), r"C:\Apps\ember.exe");
+    }
 }

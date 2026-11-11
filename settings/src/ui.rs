@@ -1482,10 +1482,10 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Source code",
-                        "github.com/SumirSeth/wisp",
+                        "github.com/Kendoismebutmaybenot/ember",
                         Button::new("github")
                             .label("Open")
-                            .on_click(|_, _, cx| cx.open_url("https://github.com/SumirSeth/wisp")),
+                            .on_click(|_, _, cx| cx.open_url("https://github.com/Kendoismebutmaybenot/ember")),
                         p,
                     )),
             )

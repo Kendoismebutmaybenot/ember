@@ -1,4 +1,4 @@
-//! Embeds the icon and version information in wisp.exe.
+//! Embeds the icon and version information in ember.exe.
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/wisp.ico");
