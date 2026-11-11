@@ -2202,22 +2202,30 @@ impl State {
         let app = item.app.clone();
         let id = app.id.clone();
         let pinned = self.pinned.iter().any(|pin| pin.id.eq_ignore_ascii_case(&id));
+        // A Store app starts by its ID and runs from its package: it has no file
+        // to show, and its windows belong to hosts such as ApplicationFrameHost.
+        let packaged = app.path.is_none() && app.id.contains('!');
         // The file to reveal: the app's own path, else the running program's.
         let location = app
             .path
             .clone()
             .filter(|path| path.contains('\\'))
-            .or_else(|| item.windows.iter().map(|w| w.exe.clone()).find(|exe| !exe.is_empty()));
-        // A desktop program can run elevated; a Store app cannot.
-        let elevatable = location.as_deref().is_some_and(|path| {
-            let lower = path.to_ascii_lowercase();
-            lower.ends_with(".exe") || lower.ends_with(".lnk")
-        });
+            .or_else(|| item.windows.iter().map(|w| w.exe.clone()).find(|exe| !exe.is_empty()))
+            .filter(|path| {
+                let lower = path.to_ascii_lowercase();
+                !packaged && !lower.contains(r"\windowsapps\") && !lower.ends_with(r"\applicationframehost.exe")
+            });
         let mut pids: Vec<u32> = windows.iter().map(|&hwnd| open_windows::content_pid(hwnd)).collect();
         pids.sort_unstable();
         pids.dedup();
         let shell = pids.iter().any(|&pid| open_windows::is_shell_process(pid));
         let endable = !pids.is_empty() && !shell;
+        // A desktop program can run elevated; a Store app and the shell cannot.
+        let elevatable = !shell
+            && location.as_deref().is_some_and(|path| {
+                let lower = path.to_ascii_lowercase();
+                lower.ends_with(".exe") || lower.ends_with(".lnk")
+            });
         unsafe {
             let Ok(menu) = CreatePopupMenu() else {
                 return;
