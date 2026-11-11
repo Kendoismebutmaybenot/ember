@@ -620,6 +620,23 @@ impl Dock {
         self.state.borrow_mut().refresh();
     }
 
+    pub fn is_pinned(&self, id: &str) -> bool {
+        self.state
+            .borrow()
+            .pinned
+            .iter()
+            .any(|pin| pin.id.eq_ignore_ascii_case(id))
+    }
+
+    /// Pins `app`, running or not, or unpins it. Returns whether it is now pinned.
+    pub fn toggle_pinned_app(&mut self, app: &AppEntry) -> bool {
+        let mut s = self.state.borrow_mut();
+        s.toggle_pin_entry(app);
+        let pinned = s.pinned.iter().any(|pin| pin.id.eq_ignore_ascii_case(&app.id));
+        s.refresh();
+        pinned
+    }
+
     pub fn apply_theme(&mut self, dark: bool, backdrop: Backdrop, tint: Option<Tint>) {
         let mut s = self.state.borrow_mut();
         s.finish_press(false);
@@ -2374,14 +2391,21 @@ impl State {
     }
 
     fn toggle_pin(&mut self, id: &str) {
-        if let Some(at) = self.pinned.iter().position(|pin| pin.id.eq_ignore_ascii_case(id)) {
+        if let Some(item) = self.items.iter().find(|item| item.app.id.eq_ignore_ascii_case(id)) {
+            let app = item.app.clone();
+            self.toggle_pin_entry(&app);
+        } else if let Some(at) = self.pinned.iter().position(|pin| pin.id.eq_ignore_ascii_case(id)) {
             self.pinned.remove(at);
-        } else if let Some(item) = self.items.iter().find(|item| item.app.id.eq_ignore_ascii_case(id)) {
-            self.pinned.push(AppEntry {
-                id: item.app.id.clone(),
-                name: item.app.name.clone(),
-                path: item.app.path.clone(),
-            });
+            self.save_pins();
+        }
+    }
+
+    /// Unpins `app` if it is pinned, else pins it after the other pins.
+    fn toggle_pin_entry(&mut self, app: &AppEntry) {
+        if let Some(at) = self.pinned.iter().position(|pin| pin.id.eq_ignore_ascii_case(&app.id)) {
+            self.pinned.remove(at);
+        } else {
+            self.pinned.push(app.clone());
         }
         self.save_pins();
     }

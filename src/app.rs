@@ -1273,6 +1273,7 @@ impl Launcher {
         self.results.extend(self.file_results.iter().cloned());
         self.results.extend(base[web..].iter().cloned());
         self.base_results = base;
+        self.mark_pinned();
         if crate::util::perf::hook_on("WISP_CAPTURE")
             && let Some(rows) = crate::util::perf::hook("WISP_CAPTURE_ROWS")
             && let Ok(rows) = rows.parse::<usize>()
@@ -1556,6 +1557,82 @@ impl Launcher {
         }
     }
 
+    /// The app behind result `index`, as the indexer knows it.
+    fn app_entry(&self, index: usize) -> Option<AppEntry> {
+        let result = self.results.get(index)?;
+        let Action::Launch { id, path, .. } = &result.action else {
+            return None;
+        };
+        if result.kind != Kind::App {
+            return None;
+        }
+        Some(
+            self.apps
+                .iter()
+                .find(|app| app.id.eq_ignore_ascii_case(id))
+                .cloned()
+                .unwrap_or_else(|| AppEntry {
+                    name: result.title.clone(),
+                    id: id.clone(),
+                    path: path.clone(),
+                }),
+        )
+    }
+
+    /// Selects the app result under the client point and returns it with
+    /// whether the dock has it pinned. Other results and a missing dock give None.
+    fn pin_target_at(&mut self, x: i32, y: i32) -> Option<(AppEntry, bool)> {
+        if self.surface.is_some() || self.morph.is_some() {
+            return None;
+        }
+        let (_, y) = self.content_point(x, y);
+        let row = self.row_at(y).filter(|row| *row < self.results.len())?;
+        let app = self.app_entry(row)?;
+        let pinned = self.dock.as_ref()?.is_pinned(&app.id);
+        self.selected = row;
+        self.invalidate();
+        Some((app, pinned))
+    }
+
+    fn toggle_pin_selected(&mut self) {
+        if let Some(app) = self.app_entry(self.selected) {
+            self.toggle_pin(&app);
+        }
+    }
+
+    fn toggle_pin(&mut self, app: &AppEntry) {
+        let Some(dock) = &mut self.dock else {
+            return;
+        };
+        dock.toggle_pinned_app(app);
+        self.mark_pinned();
+        self.invalidate();
+    }
+
+    /// Puts "Pinned" in front of the subtitle of apps pinned to the dock.
+    fn mark_pinned(&mut self) {
+        const MARK: &str = "Pinned to dock \u{00B7} ";
+        let Some(dock) = &self.dock else {
+            return;
+        };
+        for result in &mut self.results {
+            let Action::Launch { id, .. } = &result.action else {
+                continue;
+            };
+            if result.kind != Kind::App {
+                continue;
+            }
+            let marked = result.subtitle.starts_with(MARK);
+            match (dock.is_pinned(id), marked) {
+                (true, false) => result.subtitle.insert_str(0, MARK),
+                (false, true) => {
+                    result.subtitle.drain(..MARK.len());
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn reveal_selected(&mut self) {
         if let Some(path) = self.results.get(self.selected).and_then(ResultItem::path)
             && launch::reveal(path).is_ok()
@@ -1636,6 +1713,10 @@ impl Launcher {
             VK_DELETE => edited = self.editor.delete(ctrl),
             VK_A if ctrl => self.editor.select_all(),
             VK_C if ctrl && shift => self.copy_selected_path(),
+            VK_P if ctrl => {
+                self.toggle_pin_selected();
+                return true;
+            }
             VK_C if ctrl => self.copy(),
             VK_X if ctrl && self.editor.has_selection() => {
                 self.copy();
@@ -2183,6 +2264,35 @@ fn loword(v: usize) -> u32 {
     (v & 0xFFFF) as u32
 }
 
+/// Shows "Pin to dock" or "Unpin from dock" at the pointer. Returns whether it was chosen.
+fn pin_menu(hwnd: HWND, pinned: bool) -> bool {
+    unsafe {
+        let Ok(menu) = CreatePopupMenu() else {
+            return false;
+        };
+        let label = if pinned {
+            w!("Unpin from dock\tCtrl+P")
+        } else {
+            w!("Pin to dock\tCtrl+P")
+        };
+        let _ = AppendMenuW(menu, MF_STRING, 1, label);
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
+        let command = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+            point.x,
+            point.y,
+            None,
+            hwnd,
+            None,
+        )
+        .0;
+        let _ = DestroyMenu(menu);
+        command == 1
+    }
+}
+
 fn mouse_pos(lparam: LPARAM) -> (i32, i32) {
     (
         (lparam.0 & 0xFFFF) as i16 as i32,
@@ -2511,6 +2621,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     l.on_click(x, y);
                 }
             });
+        }
+        WM_RBUTTONUP => {
+            let (x, y) = mouse_pos(lparam);
+            // Release the launcher borrow before the menu's modal loop handles messages.
+            if let Some(Some((app, pinned))) = with_launcher(|l| l.pin_target_at(x, y))
+                && pin_menu(hwnd, pinned)
+            {
+                with_launcher(|l| l.toggle_pin(&app));
+            }
+            return LRESULT(0);
         }
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) as u16 as i16;
