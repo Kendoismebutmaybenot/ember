@@ -78,21 +78,34 @@ struct Active {
     items: Vec<Item>,
     font: HFONT,
     brush: HBRUSH,
-    /// Whether the menu window's border already took the color.
-    bordered: std::cell::Cell<bool>,
 }
 
 thread_local! {
     static ACTIVE: RefCell<Option<Active>> = const { RefCell::new(None) };
+    /// The thread-only hook that catches the menu window as it is created.
+    static HOOK: std::cell::Cell<Option<HHOOK>> = const { std::cell::Cell::new(None) };
+    /// The menu window's own procedure, which ours wraps.
+    static MENU_PROC: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
 }
 
 /// Shows `menu` at `point` and returns the chosen command, owner-drawn in
 /// `style` when there is one. `TPM_RETURNCMD` is always added.
 pub fn track(menu: HMENU, style: Option<Style>, flags: TRACK_POPUP_MENU_FLAGS, point: (i32, i32), owner: HWND) -> i32 {
     if let Some(style) = style {
-        unsafe { prepare(menu, style) };
+        unsafe {
+            prepare(menu, style);
+            // Owner-drawn menus get the classic frame with a light edge. Catch
+            // the menu window as it is created so its frame can be painted too.
+            let thread = windows::Win32::System::Threading::GetCurrentThreadId();
+            HOOK.set(SetWindowsHookExW(WH_CBT, Some(watch_creation), None, thread).ok());
+        }
     }
     let command = unsafe { TrackPopupMenu(menu, flags | TPM_RETURNCMD, point.0, point.1, None, owner, None).0 };
+    if let Some(hook) = HOOK.take() {
+        unsafe {
+            let _ = UnhookWindowsHookEx(hook);
+        }
+    }
     if let Some(active) = ACTIVE.with(|cell| cell.borrow_mut().take()) {
         unsafe {
             let _ = DeleteObject(active.font.into());
@@ -153,7 +166,6 @@ unsafe fn prepare(menu: HMENU, style: Style) {
                 items,
                 font: menu_font(style.dpi),
                 brush,
-                bordered: std::cell::Cell::new(false),
             })
         });
     }
@@ -183,12 +195,7 @@ fn menu_font(dpi: u32) -> HFONT {
 }
 
 /// Measures and draws owner-drawn menu items. Returns None for other messages.
-pub fn handle(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    if msg == WM_ENTERIDLE && wparam.0 == MSGF_MENU as usize {
-        recolor_border(HWND(lparam.0 as _));
-        // Idle notices still reach the window's own handler.
-        return None;
-    }
+pub fn handle(msg: u32, _wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     if msg != WM_MEASUREITEM && msg != WM_DRAWITEM {
         return None;
     }
@@ -216,26 +223,95 @@ pub fn handle(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     })
 }
 
-/// Windows 11 outlines every menu in a light border. A menu's owner learns
-/// the menu's window only from WM_ENTERIDLE, so the border takes the dock
-/// color the first time that arrives.
-fn recolor_border(menu: HWND) {
-    use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DwmSetWindowAttribute};
-    ACTIVE.with(|cell| {
-        let Ok(active) = cell.try_borrow() else {
-            return;
-        };
-        let Some(active) = active.as_ref() else {
-            return;
-        };
-        if active.bordered.replace(true) {
-            return;
+/// Wraps the popup menu window (class `#32768`) when it is created.
+unsafe extern "system" fn watch_creation(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        if code == HCBT_CREATEWND as i32 && MENU_PROC.get() == 0 {
+            let hwnd = HWND(wparam.0 as _);
+            let mut class = [0u16; 16];
+            let len = GetClassNameW(hwnd, &mut class);
+            if String::from_utf16_lossy(&class[..len.max(0) as usize]) == "#32768" {
+                MENU_PROC.set(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, menu_proc as *const () as isize));
+                round_corners(hwnd);
+            }
         }
-        let color = active.style.background;
-        unsafe {
-            let _ = DwmSetWindowAttribute(menu, DWMWA_BORDER_COLOR, (&raw const color).cast(), 4);
+        CallNextHookEx(None, code, wparam, lparam)
+    }
+}
+
+/// Windows 11's rounded corners, with DWM's outline in the menu's own color.
+fn round_corners(hwnd: HWND) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUNDSMALL, DwmSetWindowAttribute,
+    };
+    let Some(color) = background() else {
+        return;
+    };
+    unsafe {
+        let corner = DWMWCP_ROUNDSMALL;
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, (&raw const corner).cast(), 4);
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&raw const color).cast(), 4);
+    }
+}
+
+fn background() -> Option<COLORREF> {
+    ACTIVE.with(|cell| Some(cell.try_borrow().ok()?.as_ref()?.style.background))
+}
+
+/// The menu window's procedure, painting its frame in the menu's color.
+unsafe extern "system" fn menu_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        let original: WNDPROC = std::mem::transmute(MENU_PROC.get());
+        match msg {
+            WM_NCPAINT => {
+                let dc = GetWindowDC(Some(hwnd));
+                paint_frame(hwnd, dc);
+                ReleaseDC(Some(hwnd), dc);
+                LRESULT(0)
+            }
+            // The fade-in animation prints the window, frame included, into a bitmap.
+            WM_PRINT => {
+                let result = CallWindowProcW(original, hwnd, msg, wparam, lparam);
+                if lparam.0 as u32 & PRF_NONCLIENT as u32 != 0 {
+                    paint_frame(hwnd, HDC(wparam.0 as _));
+                }
+                result
+            }
+            WM_NCDESTROY => {
+                SetWindowLongPtrW(hwnd, GWLP_WNDPROC, MENU_PROC.replace(0));
+                CallWindowProcW(original, hwnd, msg, wparam, lparam)
+            }
+            _ => CallWindowProcW(original, hwnd, msg, wparam, lparam),
         }
-    });
+    }
+}
+
+/// Fills the window's frame, everything outside its client area, in the menu color.
+unsafe fn paint_frame(hwnd: HWND, dc: HDC) {
+    let Some(color) = background() else {
+        return;
+    };
+    unsafe {
+        let mut window = RECT::default();
+        let mut client = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut window);
+        let _ = GetClientRect(hwnd, &mut client);
+        let mut origin = windows::Win32::Foundation::POINT::default();
+        let _ = ClientToScreen(hwnd, &mut origin);
+        let (dx, dy) = (origin.x - window.left, origin.y - window.top);
+        let saved = SaveDC(dc);
+        ExcludeClipRect(dc, dx, dy, dx + client.right, dy + client.bottom);
+        let brush = CreateSolidBrush(color);
+        let whole = RECT {
+            left: 0,
+            top: 0,
+            right: window.right - window.left,
+            bottom: window.bottom - window.top,
+        };
+        FillRect(dc, &whole, brush);
+        let _ = DeleteObject(brush.into());
+        let _ = RestoreDC(dc, saved);
+    }
 }
 
 unsafe fn measure_item(active: &Active, item: &Item, measure: &mut MEASUREITEMSTRUCT) {
