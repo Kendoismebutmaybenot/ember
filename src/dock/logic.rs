@@ -611,9 +611,65 @@ pub fn match_app<'a>(apps: &'a [AppEntry], exe: &str, aumid: Option<&str>) -> Op
     {
         return None;
     }
+    // An ID names the exact app, so a window that has one is never guessed at.
+    let family = package_family(exe).filter(|_| aumid.is_none_or(str::is_empty));
     let exe = normalize(exe);
     apps.iter()
         .find(|app| app.path.as_deref().is_some_and(|path| normalize(path) == exe) || normalize(&app.id) == exe)
+        // A Store app's exe cannot be started by path, so without an ID fall
+        // back to its package's app.
+        .or_else(|| package_app(apps, &family?))
+}
+
+/// The app of a Store package, from the package's family name, if `apps`
+/// holds exactly one. A package with several apps does not say which of them
+/// a file in its folder belongs to.
+pub fn package_app<'a>(apps: &'a [AppEntry], family: &str) -> Option<&'a AppEntry> {
+    let prefix = format!("{}!", family.to_ascii_lowercase());
+    let mut found = apps
+        .iter()
+        .filter(|app| app.id.to_ascii_lowercase().starts_with(&prefix));
+    let app = found.next()?;
+    found.next().is_none().then_some(app)
+}
+
+/// Points pins at a Store app's ID where they still hold a path into its
+/// package folder, which Windows refuses to start. Such pins were made before
+/// the dock matched Store apps to their IDs. Returns whether a pin changed.
+pub fn migrate_packaged_pins(pins: &mut Vec<AppEntry>, apps: &[AppEntry]) -> bool {
+    let mut changed = false;
+    for pin in pins.iter_mut() {
+        let folder = pin.path.as_deref().unwrap_or(&pin.id);
+        let Some(app) = package_family(folder).and_then(|family| package_app(apps, &family)) else {
+            continue;
+        };
+        *pin = app.clone();
+        changed = true;
+    }
+    if changed {
+        // Two old pins of one app are now the same pin.
+        let mut seen: Vec<String> = Vec::new();
+        pins.retain(|pin| {
+            let id = pin.id.to_ascii_lowercase();
+            !seen.contains(&id) && {
+                seen.push(id);
+                true
+            }
+        });
+    }
+    changed
+}
+
+/// A Store app's package family name from its install folder:
+/// `…\WindowsApps\Microsoft.WindowsTerminal_1.24.12741.0_x64__8wekyb3d8bbwe\WindowsTerminal.exe`
+/// gives `Microsoft.WindowsTerminal_8wekyb3d8bbwe`.
+pub fn package_family(exe: &str) -> Option<String> {
+    const APPS: &str = r"\windowsapps\";
+    let at = exe.to_ascii_lowercase().find(APPS)? + APPS.len();
+    let folder = exe.get(at..)?.split('\\').next()?;
+    let (full, publisher) = folder.split_once("__")?;
+    let name = full.split('_').next()?;
+    (!name.is_empty() && !publisher.is_empty()).then(|| format!("{name}_{publisher}"))
 }
 
 /// Keeps items in the order they first appeared. The window list arrives in
@@ -1239,6 +1295,78 @@ mod tests {
             "Store"
         );
         assert!(match_app(&apps, "", None).is_none());
+    }
+    #[test]
+    fn matches_store_apps_by_package_folder() {
+        let terminal = r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_1.24.12741.0_x64__8wekyb3d8bbwe\WindowsTerminal.exe";
+        assert_eq!(
+            package_family(terminal).as_deref(),
+            Some("Microsoft.WindowsTerminal_8wekyb3d8bbwe")
+        );
+        assert_eq!(package_family(r"C:\Windows\System32\cmd.exe"), None);
+        assert_eq!(package_family(r"C:\Program Files\WindowsApps\NoPublisher\a.exe"), None);
+        let apps = vec![
+            AppEntry {
+                id: r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\cmd.exe".into(),
+                path: Some(r"C:\Windows\System32\cmd.exe".into()),
+                name: "Command Prompt".into(),
+            },
+            AppEntry {
+                id: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
+                path: None,
+                name: "Terminal".into(),
+            },
+        ];
+        // Terminal's windows report no AppUserModelID; its folder still finds it.
+        assert_eq!(match_app(&apps, terminal, None).unwrap().name, "Terminal");
+        // A window with an ID of its own is never matched by folder.
+        assert!(match_app(&apps, terminal, Some("Some.Other!App")).is_none());
+    }
+    #[test]
+    fn a_package_with_several_apps_matches_only_by_id() {
+        let python = |app: &str| AppEntry {
+            id: format!("PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0!{app}"),
+            path: None,
+            name: app.into(),
+        };
+        let apps = vec![python("Python"), python("Idle")];
+        let exe = r"C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\pythonw3.13.exe";
+        // The folder cannot tell IDLE from Python, so it does not pick one.
+        assert!(match_app(&apps, exe, None).is_none());
+        assert!(package_app(&apps, "PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0").is_none());
+        // The process's ID names the app exactly.
+        let idle = "PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0!Idle";
+        assert_eq!(match_app(&apps, exe, Some(idle)).unwrap().name, "Idle");
+    }
+    #[test]
+    fn old_pins_into_a_package_folder_move_to_the_app_id() {
+        let terminal = r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_1.24.12741.0_x64__8wekyb3d8bbwe\WindowsTerminal.exe";
+        let notepad = AppEntry {
+            id: r"C:\Windows\notepad.exe".into(),
+            path: Some(r"C:\Windows\notepad.exe".into()),
+            name: "Notepad".into(),
+        };
+        let apps = vec![AppEntry {
+            id: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
+            path: None,
+            name: "Terminal".into(),
+        }];
+        let old = AppEntry {
+            id: terminal.into(),
+            path: Some(terminal.into()),
+            name: "WindowsTerminal".into(),
+        };
+        let mut pins = vec![old.clone(), notepad.clone(), old.clone()];
+        assert!(migrate_packaged_pins(&mut pins, &apps));
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].id, "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App");
+        assert_eq!((pins[0].path.as_deref(), pins[0].name.as_str()), (None, "Terminal"));
+        assert_eq!(pins[1].id, notepad.id);
+        // Nothing left to move, and an app missing from the index keeps its pin.
+        assert!(!migrate_packaged_pins(&mut pins, &apps));
+        let mut pins = vec![old];
+        assert!(!migrate_packaged_pins(&mut pins, &[]));
+        assert_eq!(pins[0].name, "WindowsTerminal");
     }
     #[test]
     fn wheel_steps_volume_by_two_percent_within_range() {

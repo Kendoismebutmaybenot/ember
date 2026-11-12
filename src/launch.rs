@@ -47,6 +47,20 @@ pub fn notepad(path: &str) -> Result<()> {
     )
 }
 
+/// Shows the file's Properties, as the taskbar's menu does.
+pub fn properties(path: &str) -> Result<()> {
+    let file = HSTRING::from(path);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI,
+        lpVerb: w!("properties"),
+        lpFile: PCWSTR(file.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info) }
+}
+
 pub fn reveal(path: &str) -> Result<()> {
     execute(
         &system_tool("explorer.exe"),

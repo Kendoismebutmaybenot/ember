@@ -2,10 +2,11 @@
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, WPARAM},
+        Foundation::{CloseHandle, E_ACCESSDENIED, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WPARAM},
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         System::Threading::{
-            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+            QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
         },
         UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_ESCAPE, keybd_event},
         UI::WindowsAndMessaging::*,
@@ -189,6 +190,200 @@ fn dismiss_shell_flyout(foreground: HWND) -> bool {
 /// Asks the window to close, as its close button does.
 pub fn close(hwnd: isize) -> Result<(), String> {
     unsafe { PostMessageW(Some(HWND(hwnd as _)), WM_CLOSE, WPARAM(0), LPARAM(0)).map_err(|error| error.message()) }
+}
+
+/// Where a window's content runs, which is what End task would end.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Owner {
+    Process(u32),
+    /// Explorer, or Wisp itself. Ending it would take the desktop with it.
+    Shell,
+    /// Windows does not say which process draws the window.
+    Unknown,
+}
+
+const CORE_WINDOW: &str = "Windows.UI.Core.CoreWindow";
+
+fn class_is(hwnd: HWND, name: &str) -> bool {
+    let mut class = [0u16; 64];
+    let len = unsafe { GetClassNameW(hwnd, &mut class) };
+    String::from_utf16_lossy(&class[..len.max(0) as usize]) == name
+}
+
+fn window_pid(hwnd: HWND) -> u32 {
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid
+}
+
+/// The process that draws the window's content. A Microsoft Store app's
+/// window belongs to the shared ApplicationFrameHost, which is never the
+/// answer. The app's own process owns the `CoreWindow`: inside the frame
+/// while the app shows, and a window of its own while it is minimized, where
+/// the app's ID (`aumid`) finds it.
+pub fn owner(hwnd: isize, aumid: Option<&str>) -> Owner {
+    let hwnd = HWND(hwnd as _);
+    let mut pid = window_pid(hwnd);
+    let mut exe = process_path(pid);
+    if program_name(&exe).eq_ignore_ascii_case("ApplicationFrameHost") {
+        pid = hosted_content(hwnd)
+            .or_else(|| aumid.and_then(detached_content))
+            .unwrap_or(0);
+        exe = process_path(pid);
+    }
+    classify(pid, &exe)
+}
+
+fn classify(pid: u32, exe: &str) -> Owner {
+    if pid == 0 {
+        Owner::Unknown
+    } else if pid == std::process::id() || program_name(exe).eq_ignore_ascii_case("explorer") {
+        Owner::Shell
+    } else {
+        Owner::Process(pid)
+    }
+}
+
+/// The app process whose `CoreWindow` sits inside this frame.
+fn hosted_content(frame: HWND) -> Option<u32> {
+    unsafe extern "system" fn find(child: HWND, lparam: LPARAM) -> BOOL {
+        if class_is(child, CORE_WINDOW) {
+            unsafe { *(lparam.0 as *mut u32) = window_pid(child) };
+            return false.into();
+        }
+        true.into()
+    }
+    let mut pid = 0u32;
+    unsafe {
+        let _ = EnumChildWindows(Some(frame), Some(find), LPARAM(&raw mut pid as isize));
+    }
+    (pid != 0).then_some(pid)
+}
+
+/// The process of the app `aumid` whose `CoreWindow` Windows has taken out
+/// of its frame, as it does while a Store app is minimized.
+fn detached_content(aumid: &str) -> Option<u32> {
+    struct Search<'a> {
+        aumid: &'a str,
+        pid: u32,
+    }
+    unsafe extern "system" fn find(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+        if class_is(hwnd, CORE_WINDOW) {
+            let pid = window_pid(hwnd);
+            if process_aumid(pid).is_some_and(|id| id.eq_ignore_ascii_case(search.aumid)) {
+                search.pid = pid;
+                return false.into();
+            }
+        }
+        true.into()
+    }
+    let mut search = Search { aumid, pid: 0 };
+    unsafe {
+        let _ = EnumWindows(Some(find), LPARAM(&raw mut search as isize));
+    }
+    (search.pid != 0).then_some(search.pid)
+}
+
+// Declared here to avoid the packaging feature of the `windows` crate.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetApplicationUserModelId(process: HANDLE, length: *mut u32, id: *mut u16) -> u32;
+}
+
+/// The AppUserModelID of a packaged app's process: the exact app, where a
+/// package's folder only names the package. None for an unpackaged program.
+pub fn process_aumid(pid: u32) -> Option<String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 256];
+        let mut len = buffer.len() as u32;
+        let status = GetApplicationUserModelId(process, &mut len, buffer.as_mut_ptr());
+        let _ = CloseHandle(process);
+        // The length counts the terminating null.
+        (status == 0 && len > 1).then(|| String::from_utf16_lossy(&buffer[..len as usize - 1]))
+    }
+}
+
+/// The AppUserModelID of the process that owns the window.
+pub fn window_process_aumid(hwnd: isize) -> Option<String> {
+    process_aumid(window_pid(HWND(hwnd as _)))
+}
+
+/// Why End task did not end an app.
+#[derive(Debug)]
+pub struct EndError {
+    pub message: String,
+    /// Windows refused access, as for another user's process.
+    pub denied: bool,
+}
+
+/// Processes held open for End task. An open handle pins its process: if the
+/// app exits while the menu is up, Windows cannot give its ID to another
+/// program, so the click can only ever end the processes the menu was for.
+pub struct EndTask {
+    processes: Vec<HANDLE>,
+    denied: Option<String>,
+}
+
+impl EndTask {
+    /// Call when the menu opens. A process that has already gone is left out.
+    pub fn open(pids: &[u32]) -> Self {
+        let mut task = Self {
+            processes: Vec::new(),
+            denied: None,
+        };
+        for &pid in pids {
+            if pid == 0 || pid == std::process::id() {
+                continue;
+            }
+            match unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid) } {
+                // An exited process stays openable while anything holds it.
+                Ok(process) if unsafe { WaitForSingleObject(process, 0) } == WAIT_OBJECT_0 => unsafe {
+                    let _ = CloseHandle(process);
+                },
+                Ok(process) => task.processes.push(process),
+                Err(error) if error.code() == E_ACCESSDENIED => {
+                    task.denied.get_or_insert(error.message());
+                }
+                Err(_) => {}
+            }
+        }
+        task
+    }
+
+    /// Whether there is anything to end, or a refusal to report.
+    pub fn has_target(&self) -> bool {
+        !self.processes.is_empty() || self.denied.is_some()
+    }
+
+    /// Force-closes the processes, as Task Manager's End task does. Unsaved
+    /// work is lost. A process that has already exited counts as ended.
+    pub fn end(self) -> Result<(), EndError> {
+        let mut first = self.denied.clone().map(|message| EndError { message, denied: true });
+        for &process in &self.processes {
+            let ended = unsafe { TerminateProcess(process, 1) };
+            if let Err(error) = ended
+                && unsafe { WaitForSingleObject(process, 0) } != WAIT_OBJECT_0
+            {
+                first.get_or_insert(EndError {
+                    message: error.message(),
+                    denied: error.code() == E_ACCESSDENIED,
+                });
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+}
+
+impl Drop for EndTask {
+    fn drop(&mut self) {
+        for &process in &self.processes {
+            unsafe {
+                let _ = CloseHandle(process);
+            }
+        }
+    }
 }
 
 /// The program's name from its path: `C:\…\Code.exe` → "Code".
@@ -431,5 +626,52 @@ mod target_tests {
         ] {
             assert!(target.run(control).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    /// A process that would run for a minute if nothing ended it.
+    fn sleeper() -> std::process::Child {
+        Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_unknown_process_is_not_the_shell() {
+        assert_eq!(classify(0, ""), Owner::Unknown);
+        assert_eq!(classify(4242, r"C:\Windows\explorer.exe"), Owner::Shell);
+        assert_eq!(classify(std::process::id(), r"C:\Apps\wisp.exe"), Owner::Shell);
+        assert_eq!(classify(4242, r"C:\Windows\System32\calc.exe"), Owner::Process(4242));
+    }
+
+    #[test]
+    fn end_task_ends_the_process_it_opened() {
+        let mut child = sleeper();
+        let task = EndTask::open(&[child.id()]);
+        assert!(task.has_target());
+        task.end().unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(1));
+    }
+
+    #[test]
+    fn a_process_that_already_exited_counts_as_ended() {
+        // It exits while the menu is open: the handle still names it, so
+        // nothing else can be ended in its place, and there is no error.
+        let mut child = sleeper();
+        let task = EndTask::open(&[child.id()]);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(task.end().is_ok());
+        // It exited before the menu opened: there is nothing to end.
+        assert!(!EndTask::open(&[child.id()]).has_target());
+        // Wisp never ends itself.
+        assert!(!EndTask::open(&[0, std::process::id()]).has_target());
     }
 }

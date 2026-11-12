@@ -41,7 +41,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_INPUTSINK, RIDEV_REMOVE, RegisterRawInputDevices};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Error, GUID, Result, w};
+use windows::core::{Error, GUID, HSTRING, Result, w};
 
 use crate::commands::open_windows::{self, Window};
 use crate::config::{Backdrop, WindowListMode};
@@ -62,6 +62,16 @@ const WM_CLOSE_FLYOUT: u32 = WM_APP + 24;
 /// Shows a notification icon's tooltip after a short hover.
 const TIP_TIMER: usize = 104;
 const TIP_MS: u32 = 450;
+/// App menu commands. Pin and Unpin share one, as they did before.
+const MENU_PIN: usize = 1;
+const MENU_CLOSE: usize = 2;
+/// The app's name, which starts a new window, and its second menu.
+const MENU_NEW_WINDOW: usize = 10;
+const MENU_OPEN: usize = 11;
+const MENU_ADMIN: usize = 12;
+const MENU_LOCATION: usize = 13;
+const MENU_PROPERTIES: usize = 14;
+const MENU_END_TASK: usize = 15;
 /// Tooltips wrap past this width, in DIPs.
 const TIP_MAX: f32 = 320.0;
 /// Lists an app's windows after the same hover, and hides it once the pointer
@@ -553,6 +563,7 @@ impl Dock {
     pub fn set_apps(&mut self, apps: &[AppEntry], icons: &HashMap<String, Arc<IconPixels>>) {
         let mut s = self.state.borrow_mut();
         s.apps = apps.to_vec();
+        s.migrate_pins();
         for (id, pixels) in icons {
             s.icons.entry(id.clone()).or_insert_with(|| pixels.clone());
         }
@@ -598,6 +609,7 @@ impl Dock {
         let mut s = self.state.borrow_mut();
         s.finish_press(false);
         s.pinned = load_pins();
+        s.migrate_pins();
         s.update_pins();
     }
 
@@ -899,7 +911,11 @@ impl State {
         let windows = open_windows::list();
         let mut items: Vec<Item> = Vec::new();
         for window in windows {
-            let aumid = window_aumid(HWND(window.hwnd as _));
+            // A window that names no app may still belong to a packaged one,
+            // whose process does.
+            let aumid = window_aumid(HWND(window.hwnd as _)).or_else(|| {
+                logic::package_family(&window.exe).and_then(|_| open_windows::window_process_aumid(window.hwnd))
+            });
             let app = logic::match_app(&self.pinned, &window.exe, aumid.as_deref())
                 .or_else(|| logic::match_app(&self.apps, &window.exe, aumid.as_deref()))
                 .cloned()
@@ -997,6 +1013,13 @@ impl State {
             running,
             |a, b| a.app.id.eq_ignore_ascii_case(&b.app.id),
         );
+    }
+
+    /// Moves pins made from a Store app's exe to the app's ID, once the index knows it.
+    fn migrate_pins(&mut self) {
+        if logic::migrate_packaged_pins(&mut self.pinned, &self.apps) {
+            self.save_pins();
+        }
     }
 
     fn update_pins(&mut self) {
@@ -2175,16 +2198,36 @@ impl State {
                     eprintln!("Dock activation: {error}");
                 }
             } else {
-                let result = if self.apps.iter().any(|app| app.id == item.app.id) {
-                    crate::launch::app(&item.app.id, item.app.path.as_deref(), false)
-                } else if let Some(path) = &item.app.path {
-                    crate::launch::open(path)
-                } else {
-                    crate::launch::app(&item.app.id, None, false)
-                };
-                if let Err(error) = result {
-                    eprintln!("Dock launch: {error}");
-                }
+                self.launch(&item.app, false);
+            }
+        }
+    }
+
+    /// Starts `app`, or another instance of it, as clicking it in Start would.
+    fn launch(&self, app: &AppEntry, admin: bool) {
+        let result = if self.apps.iter().any(|known| known.id == app.id) {
+            crate::launch::app(&app.id, app.path.as_deref(), admin)
+        } else if let Some(path) = &app.path {
+            if admin {
+                crate::launch::app(&app.id, Some(path), true)
+            } else {
+                crate::launch::open(path)
+            }
+        } else {
+            crate::launch::app(&app.id, None, admin)
+        };
+        if let Err(error) = result
+            && !crate::launch::is_cancelled(&error)
+        {
+            eprintln!("Dock launch: {error}");
+            if admin {
+                // Some apps, such as most Store apps, cannot run elevated.
+                crate::tray::notify(
+                    self.owner,
+                    &format!("Could not run {} as administrator", app.name),
+                    &error.message(),
+                    true,
+                );
             }
         }
     }
@@ -2194,55 +2237,164 @@ impl State {
             return;
         };
         let windows: Vec<_> = item.windows.iter().map(|window| window.hwnd).collect();
-        let id = item.app.id.clone();
+        let app = item.app.clone();
+        let id = app.id.clone();
         let pinned = self.pinned.iter().any(|pin| pin.id.eq_ignore_ascii_case(&id));
+        // A pin made before the index knew the app may lack the file the index has.
+        let path = app.path.clone().or_else(|| {
+            self.apps
+                .iter()
+                .find(|known| known.id.eq_ignore_ascii_case(&id))
+                .and_then(|known| known.path.clone())
+        });
+        // A Store app starts by its ID and runs from its package: it has no file
+        // to show, and its windows belong to hosts such as ApplicationFrameHost.
+        let packaged = path.is_none() && app.id.contains('!');
+        // The file to reveal: the app's own path, else the running program's.
+        let location = path
+            .clone()
+            .filter(|path| path.contains('\\'))
+            .or_else(|| item.windows.iter().map(|w| w.exe.clone()).find(|exe| !exe.is_empty()))
+            .filter(|path| {
+                let lower = path.to_ascii_lowercase();
+                !packaged && !lower.contains(r"\windowsapps\") && !lower.ends_with(r"\applicationframehost.exe")
+            });
+        let hosted = item
+            .windows
+            .iter()
+            .any(|w| w.exe.to_ascii_lowercase().ends_with(r"\applicationframehost.exe"));
+        let owners: Vec<_> = item
+            .windows
+            .iter()
+            .map(|w| open_windows::owner(w.hwnd, window_aumid(HWND(w.hwnd as _)).as_deref()))
+            .collect();
+        let shell = owners.contains(&open_windows::Owner::Shell);
+        let mut pids: Vec<u32> = owners
+            .iter()
+            .filter_map(|owner| match owner {
+                open_windows::Owner::Process(pid) => Some(*pid),
+                _ => None,
+            })
+            .collect();
+        pids.sort_unstable();
+        pids.dedup();
+        // Held from now until the menu closes, so End task ends these
+        // processes and no other that might take one of their IDs. Only
+        // offered where Windows offers it on the taskbar.
+        let ending = (!shell && end_task_enabled())
+            .then(|| open_windows::EndTask::open(&pids))
+            .filter(open_windows::EndTask::has_target);
+        // A program with a file can run elevated, and so can an app that
+        // starts by its ID, through the shell's own verb. A Store app hosted
+        // in a frame and the shell cannot.
+        let elevatable = !shell
+            && !hosted
+            && (packaged
+                || location.as_deref().is_some_and(|path| {
+                    let lower = path.to_ascii_lowercase();
+                    lower.ends_with(".exe") || lower.ends_with(".lnk")
+                }));
         unsafe {
-            let Ok(menu) = CreatePopupMenu() else {
+            let (Ok(menu), Ok(submenu)) = (CreatePopupMenu(), CreatePopupMenu()) else {
                 return;
             };
-            let _ = AppendMenuW(
-                menu,
-                MF_STRING,
-                1,
-                if pinned {
-                    w!("Unpin from dock")
+            // The taskbar's order, with items that do not apply left out:
+            // the app's name, pinning, then closing.
+            let name = HSTRING::from(app.name.as_str());
+            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_WINDOW, &name);
+            let pin = if pinned {
+                w!("Unpin from dock")
+            } else {
+                w!("Pin to dock")
+            };
+            let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, pin);
+            if !windows.is_empty() {
+                let close = if windows.len() > 1 {
+                    w!("Close all windows")
                 } else {
-                    w!("Pin to dock")
-                },
-            );
-            if pinned {
-                let _ = AppendMenuW(menu, MF_STRING, 3, w!("Unpin all"));
+                    w!("Close window")
+                };
+                let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, close);
             }
-            let _ = AppendMenuW(
-                menu,
-                MF_STRING | if windows.is_empty() { MF_GRAYED } else { MF_ENABLED },
-                2,
-                w!("Close window(s)"),
-            );
+            if ending.is_some() {
+                let _ = AppendMenuW(menu, MF_STRING, MENU_END_TASK, w!("End task"));
+            }
+            // Right-clicking the name opens this, as on the taskbar.
+            let _ = AppendMenuW(submenu, MF_STRING, MENU_OPEN, w!("Open"));
+            if elevatable {
+                let _ = AppendMenuW(submenu, MF_STRING, MENU_ADMIN, w!("Run as administrator"));
+            }
+            if location.is_some() {
+                let _ = AppendMenuW(submenu, MF_STRING, MENU_LOCATION, w!("Open file location"));
+            }
+            if pinned {
+                let _ = AppendMenuW(submenu, MF_STRING, MENU_PIN, w!("Unpin from dock"));
+            }
+            if location.is_some() {
+                let _ = AppendMenuW(submenu, MF_STRING, MENU_PROPERTIES, w!("Properties"));
+            }
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
-            // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy.
+            // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy,
+            // so the second menu is opened from `menu_message`, outside the state.
             let _ = SetForegroundWindow(self.hwnd);
-            let command = TrackPopupMenu(
+            APP_SUBMENU.set(Some(AppSubmenu {
                 menu,
-                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                point.x,
-                point.y,
-                None,
-                self.hwnd,
-                None,
-            )
-            .0;
+                submenu,
+                owner: self.hwnd,
+                chosen: 0,
+            }));
+            // Notifications stay on: without them Windows sends no WM_MENURBUTTONUP.
+            let command = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, None, self.hwnd, None).0;
+            let chosen = APP_SUBMENU.take().map_or(0, |state| state.chosen);
             let _ = DestroyMenu(menu);
-            if command == 1 {
-                self.toggle_pin(&id);
-            } else if command == 3 {
-                self.pinned.clear();
-                self.save_pins();
-            } else if command == 2 {
-                for hwnd in windows {
-                    let _ = open_windows::close(hwnd);
+            let _ = DestroyMenu(submenu);
+            let command = if command != 0 {
+                command as usize
+            } else {
+                chosen as usize
+            };
+            match command {
+                MENU_PIN => self.toggle_pin(&id),
+                MENU_CLOSE => {
+                    for hwnd in windows {
+                        let _ = open_windows::close(hwnd);
+                    }
                 }
+                MENU_NEW_WINDOW | MENU_OPEN => self.launch(&app, false),
+                MENU_ADMIN => self.launch(&app, true),
+                MENU_LOCATION => {
+                    if let Some(path) = &location
+                        && let Err(error) = crate::launch::reveal(path)
+                    {
+                        eprintln!("Dock open file location: {error}");
+                    }
+                }
+                MENU_PROPERTIES => {
+                    if let Some(path) = &location
+                        && let Err(error) = crate::launch::properties(path)
+                    {
+                        eprintln!("Dock properties: {error}");
+                    }
+                }
+                MENU_END_TASK => {
+                    if let Some(ending) = ending
+                        && let Err(error) = ending.end()
+                    {
+                        let hint = if error.denied {
+                            " It may be running as another user or protected by Windows. Task Manager can end it."
+                        } else {
+                            ""
+                        };
+                        crate::tray::notify(
+                            self.owner,
+                            &format!("Could not end {}", app.name),
+                            &format!("{}{hint}", error.message),
+                            true,
+                        );
+                    }
+                }
+                _ => {}
             }
         }
         self.refresh();
@@ -2440,6 +2592,73 @@ fn load_pins() -> Vec<AppEntry> {
         .collect()
 }
 
+/// The open app menu, whose name item opens a second menu on right-click.
+#[derive(Clone, Copy)]
+struct AppSubmenu {
+    menu: HMENU,
+    submenu: HMENU,
+    owner: HWND,
+    /// The command picked in the second menu, or 0.
+    chosen: u32,
+}
+
+thread_local! {
+    static APP_SUBMENU: Cell<Option<AppSubmenu>> = const { Cell::new(None) };
+}
+
+/// Opens the app menu's second menu when its name item is right-clicked, as
+/// the taskbar does. Call first in every window procedure that can own the
+/// app menu: the dock's, and the launcher's when the dock shares its window.
+/// The dock's state is borrowed while the menu is open, so this keeps its own.
+pub fn menu_message(msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+    let state = APP_SUBMENU.get()?;
+    // wParam is the item's position; the name is the first item.
+    if msg != WM_MENURBUTTONUP || lp.0 != state.menu.0 as isize || wp.0 != 0 {
+        return None;
+    }
+    unsafe {
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
+        let chosen = TrackPopupMenu(
+            state.submenu,
+            TPM_RECURSE | TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+            point.x,
+            point.y,
+            None,
+            state.owner,
+            None,
+        )
+        .0 as u32;
+        if chosen != 0 {
+            APP_SUBMENU.set(Some(AppSubmenu { chosen, ..state }));
+            // Closes the first menu, which then returns no command.
+            let _ = EndMenu();
+        }
+    }
+    Some(LRESULT(0))
+}
+
+/// Whether Windows offers End task on the taskbar: Settings > System > For
+/// developers > End task. Off for most people, so the dock hides it too.
+fn end_task_enabled() -> bool {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let mut value = 0u32;
+    let mut size = 4u32;
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\\TaskbarDeveloperSettings"),
+            w!("TaskbarEndTask"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&mut size),
+        )
+        .is_ok()
+            && value == 1
+    }
+}
+
 fn window_aumid(hwnd: HWND) -> Option<String> {
     unsafe {
         let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd).ok()?;
@@ -2544,6 +2763,9 @@ unsafe extern "system" fn window_event(
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if let Some(result) = menu_message(msg, wp, lp) {
+        return result;
+    }
     unsafe {
         if msg == WM_NCCREATE {
             let create = &*(lp.0 as *const CREATESTRUCTW);

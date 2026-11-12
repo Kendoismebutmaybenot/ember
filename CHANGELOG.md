@@ -11,11 +11,13 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 - Turn Night Light on or off and switch Windows between dark and light mode from the launcher: type `theme`, `dark` or `light` for one toggle. Minimize, maximize, restore, close or keep on top the window you opened it over. (#76, #78, fixes #62)
 - Wisp checks daily for stable updates and shows a notification once per version, with an update row in the launcher. Turn checks off in Settings. Metered connections and Nightly builds skip checks. (#77, fixes #43)
 - Choose a color for the dock and the launcher in Settings, under Appearance > Advanced. Turn on Custom dock color, then pick a preset, set hue, saturation, lightness and alpha, or type a hex value or red, green and blue numbers. Text turns light or dark to stay readable, and with Acrylic the color's alpha sets how much of the theme's acrylic shows through. Turning the switch off returns to the theme's colors. (#72, by @Kendoismebutmaybenot, fixes #60)
+- A dock app's right-click menu matches the Windows 11 taskbar's. Its name starts a new window, and right-clicking the name offers Open, Run as administrator, Open file location, Unpin from dock and Properties. Close window or Close all windows shows when the app has windows, and End task shows when it is turned on for the taskbar in Windows Settings (System > For developers). Items that don't apply are hidden. (#73, by @Kendoismebutmaybenot)
 
 ### Fixes
 
 - Pressing a toggle in the launcher many times in a row, such as Bluetooth, Wi-Fi, dark mode or play/pause, no longer keeps Windows switching for seconds afterwards: only the last press is applied. (#78)
 - Keep the launcher's backdrop and border consistent at the bottom and center of the screen, in both light and dark themes. (#75, fixes #45)
+- Windows Terminal and other Microsoft Store apps whose windows don't name their app now group with their pinned icon, and start from the dock. Before, a pinned Terminal did nothing when clicked. Pins made from such an app move to it on their own. (#73, by @Kendoismebutmaybenot)
 
 ## 0.7.0 - 2026-11-12
 
