@@ -639,6 +639,9 @@ pub fn package_app<'a>(apps: &'a [AppEntry], family: &str) -> Option<&'a AppEntr
 pub fn migrate_packaged_pins(pins: &mut Vec<AppEntry>, apps: &[AppEntry]) -> bool {
     let mut changed = false;
     for pin in pins.iter_mut() {
+        if pin.id.contains('!') {
+            continue;
+        }
         let folder = pin.path.as_deref().unwrap_or(&pin.id);
         let Some(app) = package_family(folder).and_then(|family| package_app(apps, &family)) else {
             continue;
@@ -1338,6 +1341,24 @@ mod tests {
         let idle = "PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0!Idle";
         assert_eq!(match_app(&apps, exe, Some(idle)).unwrap().name, "Idle");
     }
+    #[test]
+    fn an_aumid_pin_keeps_its_hidden_app_identity() {
+        let path = r"C:\Program Files\WindowsApps\Package_1.0_x64__publisher\app.exe";
+        let mut pins = vec![AppEntry {
+            id: "Package_publisher!Hidden".into(),
+            path: Some(path.into()),
+            name: "Hidden app".into(),
+        }];
+        let apps = vec![AppEntry {
+            id: "Package_publisher!Visible".into(),
+            path: None,
+            name: "Visible app".into(),
+        }];
+        assert!(!migrate_packaged_pins(&mut pins, &apps));
+        assert_eq!(pins[0].id, "Package_publisher!Hidden");
+        assert_eq!(pins[0].path.as_deref(), Some(path));
+    }
+
     #[test]
     fn old_pins_into_a_package_folder_move_to_the_app_id() {
         let terminal = r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_1.24.12741.0_x64__8wekyb3d8bbwe\WindowsTerminal.exe";

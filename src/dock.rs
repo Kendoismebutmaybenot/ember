@@ -2284,117 +2284,123 @@ impl State {
         let ending = (!shell && end_task_enabled())
             .then(|| open_windows::EndTask::open(&pids))
             .filter(open_windows::EndTask::has_target);
-        // A program with a file can run elevated, and so can an app that
-        // starts by its ID, through the shell's own verb. A Store app hosted
-        // in a frame and the shell cannot.
+        // Only file-backed programs can run elevated; packaged apps and shell hosts cannot.
         let elevatable = !shell
             && !hosted
-            && (packaged
-                || location.as_deref().is_some_and(|path| {
-                    let lower = path.to_ascii_lowercase();
-                    lower.ends_with(".exe") || lower.ends_with(".lnk")
-                }));
-        unsafe {
-            let (Ok(menu), Ok(submenu)) = (CreatePopupMenu(), CreatePopupMenu()) else {
-                return;
-            };
-            // The taskbar's order, with items that do not apply left out:
-            // the app's name, pinning, then closing.
-            let name = HSTRING::from(app.name.as_str());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_WINDOW, &name);
-            let pin = if pinned {
-                w!("Unpin from dock")
-            } else {
-                w!("Pin to dock")
-            };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, pin);
-            if !windows.is_empty() {
-                let close = if windows.len() > 1 {
-                    w!("Close all windows")
-                } else {
-                    w!("Close window")
+            && !packaged
+            && location.as_deref().is_some_and(|path| {
+                let lower = path.to_ascii_lowercase();
+                lower.ends_with(".exe") || lower.ends_with(".lnk")
+            });
+        'menus: {
+            unsafe {
+                let (menu, submenu) = match (CreatePopupMenu(), CreatePopupMenu()) {
+                    (Ok(menu), Ok(submenu)) => (menu, submenu),
+                    (menu, submenu) => {
+                        for menu in [menu, submenu].into_iter().flatten() {
+                            let _ = DestroyMenu(menu);
+                        }
+                        break 'menus;
+                    }
                 };
-                let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, close);
-            }
-            if ending.is_some() {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_END_TASK, w!("End task"));
-            }
-            // Right-clicking the name opens this, as on the taskbar.
-            let _ = AppendMenuW(submenu, MF_STRING, MENU_OPEN, w!("Open"));
-            if elevatable {
-                let _ = AppendMenuW(submenu, MF_STRING, MENU_ADMIN, w!("Run as administrator"));
-            }
-            if location.is_some() {
-                let _ = AppendMenuW(submenu, MF_STRING, MENU_LOCATION, w!("Open file location"));
-            }
-            if pinned {
-                let _ = AppendMenuW(submenu, MF_STRING, MENU_PIN, w!("Unpin from dock"));
-            }
-            if location.is_some() {
-                let _ = AppendMenuW(submenu, MF_STRING, MENU_PROPERTIES, w!("Properties"));
-            }
-            let mut point = POINT::default();
-            let _ = GetCursorPos(&mut point);
-            // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy,
-            // so the second menu is opened from `menu_message`, outside the state.
-            let _ = SetForegroundWindow(self.hwnd);
-            APP_SUBMENU.set(Some(AppSubmenu {
-                menu,
-                submenu,
-                owner: self.hwnd,
-                chosen: 0,
-            }));
-            // Notifications stay on: without them Windows sends no WM_MENURBUTTONUP.
-            let command = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, None, self.hwnd, None).0;
-            let chosen = APP_SUBMENU.take().map_or(0, |state| state.chosen);
-            let _ = DestroyMenu(menu);
-            let _ = DestroyMenu(submenu);
-            let command = if command != 0 {
-                command as usize
-            } else {
-                chosen as usize
-            };
-            match command {
-                MENU_PIN => self.toggle_pin(&id),
-                MENU_CLOSE => {
-                    for hwnd in windows {
-                        let _ = open_windows::close(hwnd);
-                    }
+                // The taskbar's order, with items that do not apply left out:
+                // the app's name, pinning, then closing.
+                let name = HSTRING::from(app.name.as_str());
+                let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_WINDOW, &name);
+                let pin = if pinned {
+                    w!("Unpin from dock")
+                } else {
+                    w!("Pin to dock")
+                };
+                let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, pin);
+                if !windows.is_empty() {
+                    let close = if windows.len() > 1 {
+                        w!("Close all windows")
+                    } else {
+                        w!("Close window")
+                    };
+                    let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, close);
                 }
-                MENU_NEW_WINDOW | MENU_OPEN => self.launch(&app, false),
-                MENU_ADMIN => self.launch(&app, true),
-                MENU_LOCATION => {
-                    if let Some(path) = &location
-                        && let Err(error) = crate::launch::reveal(path)
-                    {
-                        eprintln!("Dock open file location: {error}");
-                    }
+                if ending.is_some() {
+                    let _ = AppendMenuW(menu, MF_STRING, MENU_END_TASK, w!("End task"));
                 }
-                MENU_PROPERTIES => {
-                    if let Some(path) = &location
-                        && let Err(error) = crate::launch::properties(path)
-                    {
-                        eprintln!("Dock properties: {error}");
-                    }
+                // Right-clicking the name opens this, as on the taskbar.
+                let _ = AppendMenuW(submenu, MF_STRING, MENU_OPEN, w!("Open"));
+                if elevatable {
+                    let _ = AppendMenuW(submenu, MF_STRING, MENU_ADMIN, w!("Run as administrator"));
                 }
-                MENU_END_TASK => {
-                    if let Some(ending) = ending
-                        && let Err(error) = ending.end()
-                    {
-                        let hint = if error.denied {
-                            " It may be running as another user or protected by Windows. Task Manager can end it."
-                        } else {
-                            ""
-                        };
-                        crate::tray::notify(
-                            self.owner,
-                            &format!("Could not end {}", app.name),
-                            &format!("{}{hint}", error.message),
-                            true,
-                        );
-                    }
+                if location.is_some() {
+                    let _ = AppendMenuW(submenu, MF_STRING, MENU_LOCATION, w!("Open file location"));
                 }
-                _ => {}
+                if pinned {
+                    let _ = AppendMenuW(submenu, MF_STRING, MENU_PIN, w!("Unpin from dock"));
+                }
+                if location.is_some() {
+                    let _ = AppendMenuW(submenu, MF_STRING, MENU_PROPERTIES, w!("Properties"));
+                }
+                let mut point = POINT::default();
+                let _ = GetCursorPos(&mut point);
+                // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy,
+                // so the second menu is opened from `menu_message`, outside the state.
+                let _ = SetForegroundWindow(self.hwnd);
+                APP_SUBMENU.set(Some(AppSubmenu {
+                    menu,
+                    submenu,
+                    owner: self.hwnd,
+                    chosen: 0,
+                }));
+                // Notifications stay on: without them Windows sends no WM_MENURBUTTONUP.
+                let command = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, None, self.hwnd, None).0;
+                let chosen = APP_SUBMENU.take().map_or(0, |state| state.chosen);
+                let _ = DestroyMenu(menu);
+                let _ = DestroyMenu(submenu);
+                let command = if command != 0 {
+                    command as usize
+                } else {
+                    chosen as usize
+                };
+                match command {
+                    MENU_PIN => self.toggle_pin(&id),
+                    MENU_CLOSE => {
+                        for hwnd in windows {
+                            let _ = open_windows::close(hwnd);
+                        }
+                    }
+                    MENU_NEW_WINDOW | MENU_OPEN => self.launch(&app, false),
+                    MENU_ADMIN => self.launch(&app, true),
+                    MENU_LOCATION => {
+                        if let Some(path) = &location
+                            && let Err(error) = crate::launch::reveal(path)
+                        {
+                            eprintln!("Dock open file location: {error}");
+                        }
+                    }
+                    MENU_PROPERTIES => {
+                        if let Some(path) = &location
+                            && let Err(error) = crate::launch::properties(path)
+                        {
+                            eprintln!("Dock properties: {error}");
+                        }
+                    }
+                    MENU_END_TASK => {
+                        if let Some(ending) = ending
+                            && let Err(error) = ending.end()
+                        {
+                            let hint = if error.denied {
+                                " It may be running as another user or protected by Windows. Task Manager can end it."
+                            } else {
+                                ""
+                            };
+                            crate::tray::notify(
+                                self.owner,
+                                &format!("Could not end {}", app.name),
+                                &format!("{}{hint}", error.message),
+                                true,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         self.refresh();

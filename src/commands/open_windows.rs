@@ -235,7 +235,7 @@ pub fn owner(hwnd: isize, aumid: Option<&str>) -> Owner {
 }
 
 fn classify(pid: u32, exe: &str) -> Owner {
-    if pid == 0 {
+    if pid == 0 || exe.is_empty() || program_name(exe).eq_ignore_ascii_case("ApplicationFrameHost") {
         Owner::Unknown
     } else if pid == std::process::id() || program_name(exe).eq_ignore_ascii_case("explorer") {
         Owner::Shell
@@ -646,6 +646,11 @@ mod tests {
     #[test]
     fn an_unknown_process_is_not_the_shell() {
         assert_eq!(classify(0, ""), Owner::Unknown);
+        assert_eq!(classify(4242, ""), Owner::Unknown);
+        assert_eq!(
+            classify(4242, r"C:\Windows\System32\ApplicationFrameHost.exe"),
+            Owner::Unknown
+        );
         assert_eq!(classify(4242, r"C:\Windows\explorer.exe"), Owner::Shell);
         assert_eq!(classify(std::process::id(), r"C:\Apps\wisp.exe"), Owner::Shell);
         assert_eq!(classify(4242, r"C:\Windows\System32\calc.exe"), Owner::Process(4242));

@@ -77,7 +77,7 @@ Choose **In group**, **Own icon** or **Hidden** for each status item in Settings
 
 Tray icons keep their usual clicks; drag their chevron or the gap beside them to move the tray block. All app icons stay together when sections move. The section order is saved in `dock_order` in config.toml.
 
-Right-click an app and choose **Pin to dock** to keep it before running apps, in pin order. Click a closed pinned app to start it. To clear pins, choose **Unpin all** on a pinned app, or **Unpin all apps** in Settings.
+Right-click an app and choose **Pin to dock** to keep it before running apps, in pin order. Click a closed pinned app to start it. To clear pins, choose **Unpin all apps** in Settings.
 
 The dock hides over full-screen apps. Tray icons you pin in Windows show in the dock; the rest are behind **⌄**.
 
