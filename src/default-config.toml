@@ -69,3 +69,10 @@ dock_order = ["launcher", "apps", "tray", "status", "sound", "battery", "wifi", 
 # Status items in the group or in their own draggable slots; omitted items are hidden.
 dock_status_group = ["sound", "battery", "wifi", "bluetooth"]
 dock_status_icons = []
+
+# The color of the dock and the launcher, as "#RRGGBB", or "#RRGGBBAA" where
+# AA (00 to FF) sets how strongly the color covers the theme's acrylic. Mica
+# and solid show it at full strength. Text turns light or dark to stay
+# readable, and follows the theme below 40% strength. Empty uses the theme's
+# colors.
+dock_color = ""

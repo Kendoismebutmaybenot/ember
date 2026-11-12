@@ -613,11 +613,17 @@ impl Launcher {
             return;
         }
         self.config_mtime = mtime;
-        let (config, error) = Config::load();
-        if let Some(error) = error {
-            // Keep the last valid config so a read or parse error does not change it.
-            tray::notify(self.hwnd, "Wisp config", &error, true);
-            return;
+        let (config, warning) = match Config::read() {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                // Keep the last valid config so a read or parse error does not change it.
+                tray::notify(self.hwnd, "Wisp config", &error, true);
+                return;
+            }
+        };
+        // One value that cannot be used falls back to its default; the rest applies.
+        if let Some(warning) = warning {
+            tray::notify(self.hwnd, "Wisp config", &warning, true);
         }
         self.config = config;
         self.taskbar_failures = 0;
@@ -803,10 +809,11 @@ impl Launcher {
             Theme::Light => false,
             Theme::System => !system::system_uses_light_theme(),
         };
-        // Use the dock's persistent material in either launcher placement.
-        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, self.config.backdrop, true);
+        let tint = self.config.dock_tint();
+        // Use the dock's persistent material and color in either launcher placement.
+        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, self.config.backdrop, true, tint);
         if let Some(dock) = &mut self.dock {
-            dock.apply_theme(Palette::new(dark, true), self.config.backdrop);
+            dock.apply_theme(dark, self.config.backdrop, tint);
         }
         self.invalidate();
     }
@@ -1167,11 +1174,11 @@ impl Launcher {
         });
         // Composition acrylic re-blurs on every resize. Use its solid tint during
         // motion, then restore the live material once the geometry settles.
-        self.palette = crate::theme::apply_backdrop(
+        self.palette = crate::theme::apply_moving_backdrop(
             self.hwnd,
             self.palette.text.r > 0.5,
-            crate::config::Backdrop::Solid,
-            true,
+            self.config.backdrop,
+            self.config.dock_tint(),
         );
         self.morph.as_mut().unwrap().start = Instant::now();
         self.outline = Some(from);

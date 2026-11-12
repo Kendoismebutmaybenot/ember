@@ -7922,6 +7922,7 @@ name = "wisp-settings"
 version = "0.7.0"
 dependencies = [
  "gpui-kit",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",

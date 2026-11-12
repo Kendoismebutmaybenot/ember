@@ -2,9 +2,11 @@
 //! onboarding instead.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui_kit::component::{
     button::{Button, ButtonGroup, ButtonVariants},
+    color_picker::{ColorPickerEvent, ColorPickerState, ColorSelect},
     input::{Input, InputEvent, InputState},
     select::{SearchableVec, Select, SelectEvent, SelectState},
     slider::{Slider, SliderEvent, SliderState},
@@ -31,6 +33,17 @@ const WINDOW_LISTS: [(&str, &str); 3] = [
     ("off", "Off"),
 ];
 const ONBOARDING_STEPS: usize = 3;
+/// Dock color presets as `0xRRGGBBAA`. Each brings its own strength, so one
+/// never inherits the last color's: black is solid, the others let some of
+/// the theme's acrylic through.
+const DOCK_COLORS: [u32; 9] = [
+    0x000000FF, 0x0F172ABF, 0x1E3A8ABF, 0x0F766EBF, 0x166534BF, 0x6B21A8BF, 0x9F1239BF, 0xB45309BF, 0x475569BF,
+];
+/// The color the Custom dock color switch starts from.
+const DEFAULT_DOCK_COLOR: &str = "#1E3A8ABF";
+/// How long the picker rests before its color is saved. Each save rewrites
+/// the config and makes the launcher apply its backdrop again.
+const COLOR_SAVE_DELAY: Duration = Duration::from_millis(250);
 type Choices = SelectState<SearchableVec<&'static str>>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,6 +105,17 @@ pub struct Settings {
     window_list: Entity<Choices>,
     results: Entity<SliderState>,
     app_icon_size: Entity<SliderState>,
+    /// Whether Appearance's Advanced section is expanded.
+    advanced_open: bool,
+    dock_picker: Entity<ColorPickerState>,
+    /// The picker's color as red, green and blue numbers.
+    dock_rgb: [Entity<InputState>; 3],
+    /// The color the Custom dock color switch brings back.
+    last_dock_color: String,
+    /// The color the picker and number fields show.
+    dock_shown: Option<Hsla>,
+    /// The save waiting for the picker to rest.
+    color_save: Option<Task<()>>,
     pinned_count: usize,
     autostart: bool,
     powertoys: Result<bool, String>,
@@ -99,6 +123,43 @@ pub struct Settings {
     focus: FocusHandle,
     icon: Arc<Image>,
     updates: Updates,
+}
+
+/// A color from its `0xRRGGBBAA` number.
+fn hsla_of(rgba: u32) -> Hsla {
+    let channel = |shift: u32| ((rgba >> shift) & 0xFF) as f32 / 255.;
+    Rgba {
+        r: channel(24),
+        g: channel(16),
+        b: channel(8),
+        a: channel(0),
+    }
+    .into()
+}
+
+/// A color's red, green, blue and alpha, each 0 to 255.
+fn channels(color: Hsla) -> [u8; 4] {
+    let rgba = Rgba::from(color);
+    [rgba.r, rgba.g, rgba.b, rgba.a].map(|channel| (channel.clamp(0., 1.) * 255.).round() as u8)
+}
+
+/// `color` as picked, or with the strength of `shown` when it arrives at full
+/// strength as a different color that is not a preset: the palette grid and
+/// a six-digit hex carry no strength of their own.
+fn keep_strength(shown: Option<Hsla>, color: Hsla) -> Hsla {
+    let [r, g, b, a] = channels(color);
+    let preset = DOCK_COLORS.contains(&u32::from_be_bytes([r, g, b, a]));
+    match shown {
+        Some(shown) if a == 0xFF && !preset && channels(shown)[..3] != [r, g, b] => Hsla { a: shown.a, ..color },
+        _ => color,
+    }
+}
+
+/// The `dock_color` value for a color. The alpha is always written, because
+/// a value without one means the default strength, not full strength.
+fn dock_value(color: Hsla) -> String {
+    let [r, g, b, a] = channels(color);
+    format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
 }
 
 fn labels(choices: &[(&'static str, &'static str)]) -> Vec<&'static str> {
@@ -171,8 +232,31 @@ impl Settings {
                 .step(1.)
                 .default_value(config.dock_icon_size as f32)
         });
+        let dock_picker = cx.new(|cx| ColorPickerState::new(window, cx));
+        // Digits only, so a field never holds something that is not a number.
+        let digits = regex::Regex::new(r"^[0-9]{0,3}$").unwrap();
+        let dock_rgb = [(); 3].map(|()| cx.new(|cx| InputState::new(window, cx).pattern(digits.clone())));
         let focus = cx.focus_handle();
 
+        cx.subscribe_in(&dock_picker, window, |this, _, event, window, cx| {
+            if let ColorPickerEvent::Change(Some(color)) = event {
+                this.dock_color_picked(*color, window, cx);
+            }
+        })
+        .detach();
+        for field in &dock_rgb {
+            cx.subscribe_in(field, window, |this, _, event, window, cx| match event {
+                InputEvent::Change => this.dock_rgb_edited(window, cx),
+                // A field left empty shows the color's number again.
+                InputEvent::Blur | InputEvent::PressEnter { .. } => {
+                    if let Some(color) = this.dock_shown {
+                        this.write_dock_rgb(color, window, cx);
+                    }
+                }
+                _ => {}
+            })
+            .detach();
+        }
         cx.subscribe_in(&shortcut, window, |this, input, event, window, cx| {
             if matches!(event, InputEvent::Change) {
                 let value = input.read(cx).value().to_string();
@@ -278,6 +362,12 @@ impl Settings {
             window_list,
             results,
             app_icon_size,
+            advanced_open: false,
+            dock_picker,
+            dock_rgb,
+            last_dock_color: DEFAULT_DOCK_COLOR.into(),
+            dock_shown: None,
+            color_save: None,
             autostart: system::autostart_enabled(),
             powertoys: system::powertoys_run_enabled(),
             recording: false,
@@ -286,10 +376,151 @@ impl Settings {
             updates: Updates::Idle,
         };
         this.apply_theme(window, cx);
+        this.show_dock_color(window, cx);
         if !welcome {
             this.check_updates(false, cx);
         }
         this
+    }
+
+    /// Shows the config's dock color in the picker and the number fields.
+    fn show_dock_color(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((rgb, alpha)) = config::color_parts(&self.config.dock_color) else {
+            return;
+        };
+        self.last_dock_color = self.config.dock_color.clone();
+        let color = hsla_of(rgb << 8 | u32::from(alpha));
+        self.dock_picker
+            .update(cx, |picker, cx| picker.set_value(color, window, cx));
+        self.dock_shown = Some(color);
+        self.write_dock_rgb(color, window, cx);
+    }
+
+    /// Takes a color from the picker. A color from the palette grid or a
+    /// six-digit hex comes at full strength, which would silently drop the
+    /// acrylic blur, so it keeps the current strength, as the number fields
+    /// do. A preset brings its own, and the alpha slider sets it.
+    fn dock_color_picked(&mut self, color: Hsla, window: &mut Window, cx: &mut Context<Self>) {
+        let color = keep_strength(self.dock_shown, color);
+        if self.dock_picker.read(cx).value() != Some(color) {
+            self.dock_picker
+                .update(cx, |picker, cx| picker.set_value(color, window, cx));
+        }
+        self.dock_shown = Some(color);
+        self.write_dock_rgb(color, window, cx);
+        self.save_dock_color_soon(dock_value(color), window, cx);
+    }
+
+    fn write_dock_rgb(&mut self, color: Hsla, window: &mut Window, cx: &mut Context<Self>) {
+        for (field, channel) in self.dock_rgb.iter().zip(channels(color)) {
+            field.update(cx, |input, cx| input.set_value(channel.to_string(), window, cx));
+        }
+    }
+
+    /// Takes a color from the number fields once all three hold a number.
+    /// A number over 255 becomes 255 in its field.
+    fn dock_rgb_edited(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut rgb = [0u8; 3];
+        for (channel, field) in rgb.iter_mut().zip(self.dock_rgb.clone()) {
+            let Ok(value) = field.read(cx).value().trim().parse::<u32>() else {
+                return;
+            };
+            if value > 255 {
+                field.update(cx, |input, cx| input.set_value("255", window, cx));
+            }
+            *channel = value.min(255) as u8;
+        }
+        // The numbers pick the color. Its strength stays as it was.
+        let alpha = self
+            .dock_picker
+            .read(cx)
+            .value()
+            .map_or(0xFF, |color| channels(color)[3]);
+        let color = hsla_of(u32::from_be_bytes([rgb[0], rgb[1], rgb[2], alpha]));
+        self.dock_picker
+            .update(cx, |picker, cx| picker.set_value(color, window, cx));
+        self.dock_shown = Some(color);
+        self.save_dock_color_soon(dock_value(color), window, cx);
+    }
+
+    /// Saves the color once the picker has rested, not on each step of a drag.
+    fn save_dock_color_soon(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.color_save = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(COLOR_SAVE_DELAY).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.color_save = None;
+                if value != this.config.dock_color && this.save("dock_color", value.clone().into(), window, cx) {
+                    this.last_dock_color = value;
+                }
+            });
+        }));
+    }
+
+    /// Off returns the dock to the theme's colors. On brings the last color back.
+    fn set_custom_dock_color(&mut self, enabled: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.color_save = None;
+        let value = if enabled {
+            self.last_dock_color.clone()
+        } else {
+            String::new()
+        };
+        if self.save("dock_color", value.into(), window, cx) {
+            self.show_dock_color(window, cx);
+        }
+    }
+
+    /// The Advanced section's rows: the switch, then the color while it is on.
+    fn advanced_rows(&self, p: Palette, cx: &mut Context<Self>) -> Div {
+        let custom = !self.config.dock_color.is_empty();
+        v_flex()
+            .child(divider(p))
+            .child(row(
+                "Custom dock color",
+                "Colors the dock and the launcher. Off uses the theme's colors.",
+                Switch::new("custom-dock-color")
+                    .checked(custom)
+                    .accessibility_label("Custom dock color")
+                    .on_change(
+                        cx.listener(|this, enabled: &bool, window, cx| {
+                            this.set_custom_dock_color(*enabled, window, cx)
+                        }),
+                    ),
+                p,
+            ))
+            .when(custom, |rows| {
+                rows.child(divider(p)).child(
+                    item(
+                        "Dock color",
+                        "For the dock and the launcher. Text turns light or dark to stay readable, and follows the \
+                         theme below 40% strength. With Acrylic, the color's alpha sets how much of the theme's acrylic shows through. \
+                         Mica and Solid show the color at full strength.",
+                        p,
+                    )
+                    .child(
+                        // Wraps the number fields under the picker in a narrow window.
+                        h_flex()
+                            .flex_wrap()
+                            .gap_3()
+                            .child(
+                                ColorSelect::new(&self.dock_picker)
+                                    .featured_colors(DOCK_COLORS.map(hsla_of).to_vec())
+                                    .accessibility_label("Dock color")
+                                    .w(px(170.)),
+                            )
+                            .children(
+                                ["Red", "Green", "Blue"]
+                                    .into_iter()
+                                    .zip(&self.dock_rgb)
+                                    .map(|(name, field)| {
+                                        h_flex()
+                                            .gap_1p5()
+                                            .child(hint(&name[..1], p))
+                                            .child(Input::new(field).aria_label(name).w(px(58.)))
+                                    }),
+                            ),
+                    ),
+                )
+            })
     }
 
     fn apply_theme(&self, window: &mut Window, cx: &mut App) {
@@ -392,6 +623,8 @@ impl Settings {
                 let app_icon_size = self.config.dock_icon_size as f32;
                 self.app_icon_size
                     .update(cx, |state, cx| state.set_value(app_icon_size, window, cx));
+                self.color_save = None;
+                self.show_dock_color(window, cx);
                 self.apply_theme(window, cx);
             }
             Err(error) => self.error = Some(error),
@@ -933,7 +1166,8 @@ impl Settings {
             .into_any_element()
     }
 
-    fn appearance(&self, p: Palette, _cx: &mut Context<Self>) -> AnyElement {
+    fn appearance(&self, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        let advanced_open = self.advanced_open;
         v_flex()
             .gap_2()
             .child(label("Look", p))
@@ -951,7 +1185,33 @@ impl Settings {
                         "Acrylic and mica blur what is behind the launcher and fade in. Solid appears at once.",
                         Select::new(&self.backdrop).accessibility_label("Backdrop").w(px(160.)),
                         p,
-                    )),
+                    ))
+                    .child(divider(p))
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .px_4()
+                            .py_3()
+                            .child(div().flex_1().child("Advanced"))
+                            .child(
+                                Icon::new(IconName::ChevronDown)
+                                    .size_4()
+                                    .text_color(p.muted)
+                                    .when(!advanced_open, |icon| {
+                                        icon.rotate(radians(-std::f32::consts::FRAC_PI_2))
+                                    }),
+                            )
+                            .id("advanced")
+                            .cursor_pointer()
+                            .role(Role::Button)
+                            .aria_label("Advanced")
+                            .aria_expanded(advanced_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.advanced_open = !this.advanced_open;
+                                cx.notify();
+                            })),
+                    )
+                    .when(advanced_open, |group| group.child(self.advanced_rows(p, cx))),
             )
             .child(div().h_3())
             .child(label("Results", p))
@@ -1399,4 +1659,28 @@ fn hint(text: impl Into<SharedString>, p: Palette) -> Div {
 
 fn error_text(text: &str, p: Palette) -> Div {
     div().text_xs().text_color(p.danger).child(text.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    // Not a glob import: gpui's prelude has a `test` attribute of its own.
+    use super::{channels, hsla_of, keep_strength};
+
+    #[test]
+    fn a_picked_color_keeps_the_strength_unless_it_brings_one() {
+        let shown = Some(hsla_of(0x1E3A8A40));
+        // A palette-grid color or a six-digit hex arrives at full strength.
+        assert_eq!(
+            channels(keep_strength(shown, hsla_of(0xDC2626FF))),
+            [0xDC, 0x26, 0x26, 0x40]
+        );
+        // A preset brings its own strength, Black included.
+        assert_eq!(channels(keep_strength(shown, hsla_of(0x000000FF)))[3], 0xFF);
+        assert_eq!(channels(keep_strength(shown, hsla_of(0x0F766EBF)))[3], 0xBF);
+        // The same color at full strength is the alpha slider moving to 100%.
+        assert_eq!(channels(keep_strength(shown, hsla_of(0x1E3A8AFF)))[3], 0xFF);
+        // A color with its own strength keeps it, and with nothing shown all stays.
+        assert_eq!(channels(keep_strength(shown, hsla_of(0xDC262680)))[3], 0x80);
+        assert_eq!(channels(keep_strength(None, hsla_of(0xDC2626FF)))[3], 0xFF);
+    }
 }

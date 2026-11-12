@@ -10,6 +10,7 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 - Hide the search button in the dock: turn off Search button in Settings, under Dock, or set `dock_search_button = false`. Your shortcut still opens the launcher. (#81, by @SorbetMango, fixes #79; #82)
 - Turn Night Light on or off and switch Windows between dark and light mode from the launcher: type `theme`, `dark` or `light` for one toggle. Minimize, maximize, restore, close or keep on top the window you opened it over. (#76, #78, fixes #62)
 - Wisp checks daily for stable updates and shows a notification once per version, with an update row in the launcher. Turn checks off in Settings. Metered connections and Nightly builds skip checks. (#77, fixes #43)
+- Choose a color for the dock and the launcher in Settings, under Appearance > Advanced. Turn on Custom dock color, then pick a preset, set hue, saturation, lightness and alpha, or type a hex value or red, green and blue numbers. Text turns light or dark to stay readable, and with Acrylic the color's alpha sets how much of the theme's acrylic shows through. Turning the switch off returns to the theme's colors. (#72, by @Kendoismebutmaybenot, fixes #60)
 
 ### Fixes
 

@@ -46,7 +46,7 @@ use windows::core::{Error, GUID, Result, w};
 use crate::commands::open_windows::{self, Window};
 use crate::config::{Backdrop, WindowListMode};
 use crate::indexer::{AppEntry, IconPixels};
-use crate::theme::Palette;
+use crate::theme::{Palette, Tint};
 use crate::tray_host::{self, Action, TrayHost};
 
 pub const WM_SHOW_LAUNCHER: u32 = WM_APP + 20;
@@ -127,6 +127,8 @@ struct State {
     suppress_click: bool,
     palette: Palette,
     backdrop: Backdrop,
+    /// The user's dock color, kept so system theme changes reapply it.
+    tint: Option<Tint>,
     window_list_mode: WindowListMode,
     app_icon_size: f32,
     renderer: render::Renderer,
@@ -245,6 +247,7 @@ impl Dock {
             suppress_click: false,
             palette: Palette::new(true, true),
             backdrop: Backdrop::Acrylic,
+            tint: None,
             window_list_mode: WindowListMode::default(),
             app_icon_size: logic::DEFAULT_APP_ICON_SIZE,
             renderer: render::Renderer::new()?,
@@ -429,7 +432,7 @@ impl Dock {
             }
             dock.hooks.push(hook);
         }
-        dock.apply_theme(Palette::new(true, true), Backdrop::Acrylic);
+        dock.apply_theme(true, Backdrop::Acrylic, None);
         dock.refresh();
         Ok(dock)
     }
@@ -621,10 +624,10 @@ impl Dock {
         self.state.borrow_mut().refresh();
     }
 
-    pub fn apply_theme(&mut self, palette: Palette, backdrop: Backdrop) {
+    pub fn apply_theme(&mut self, dark: bool, backdrop: Backdrop, tint: Option<Tint>) {
         let mut s = self.state.borrow_mut();
         s.finish_press(false);
-        s.apply_material(palette.text.r > 0.5, backdrop);
+        s.apply_material(dark, backdrop, tint);
     }
 
     /// Hosts the notification area in the dock while `enabled`, which
@@ -860,11 +863,13 @@ impl State {
         }
     }
 
-    fn apply_material(&mut self, dark: bool, backdrop: Backdrop) {
+    fn apply_material(&mut self, dark: bool, backdrop: Backdrop, tint: Option<Tint>) {
         self.backdrop = backdrop;
-        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, backdrop, true);
+        self.tint = tint;
+        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, backdrop, true, tint);
+        // Popups over the dock (flyouts, tooltips, window lists) wear the same color.
         for hwnd in [self.flyout, self.tip, self.windows] {
-            crate::theme::apply_backdrop(hwnd, dark, backdrop, true);
+            crate::theme::apply_backdrop(hwnd, dark, backdrop, true, tint);
             unsafe {
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
@@ -2563,8 +2568,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             match msg {
                 WM_SETTINGCHANGE | WM_POWERBROADCAST | WM_THEMECHANGED => {
                     let dark = s.palette.text.r > 0.5;
-                    let backdrop = s.backdrop;
-                    s.apply_material(dark, backdrop);
+                    let (backdrop, tint) = (s.backdrop, s.tint);
+                    s.apply_material(dark, backdrop, tint);
                 }
                 WM_REFRESH => {
                     if !s.scheduled {
