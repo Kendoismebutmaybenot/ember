@@ -244,6 +244,7 @@ pub fn run() -> Result<()> {
             win_key_hook: None,
             tray_icon: small_icon,
             palette: Palette::new(true, true),
+            dark: true,
             renderer,
             dpi: system_dpi,
             position: (0, 0),
@@ -405,6 +406,7 @@ struct Launcher {
     win_key_hook: Option<crate::win_key::Hook>,
     tray_icon: HICON,
     palette: Palette,
+    dark: bool,
     renderer: Renderer,
     dpi: u32,
     /// Screen coordinates of the launcher's left edge and its top edge, or its
@@ -809,6 +811,7 @@ impl Launcher {
             Theme::Light => false,
             Theme::System => !system::system_uses_light_theme(),
         };
+        self.dark = dark;
         let tint = self.config.dock_tint();
         // Use the dock's persistent material and color in either launcher placement.
         self.palette = crate::theme::apply_backdrop(self.hwnd, dark, self.config.backdrop, true, tint);
@@ -1174,12 +1177,8 @@ impl Launcher {
         });
         // Composition acrylic re-blurs on every resize. Use its solid tint during
         // motion, then restore the live material once the geometry settles.
-        self.palette = crate::theme::apply_moving_backdrop(
-            self.hwnd,
-            self.palette.text.r > 0.5,
-            self.config.backdrop,
-            self.config.dock_tint(),
-        );
+        self.palette =
+            crate::theme::apply_moving_backdrop(self.hwnd, self.dark, self.config.backdrop, self.config.dock_tint());
         self.morph.as_mut().unwrap().start = Instant::now();
         self.outline = Some(from);
         self.set_bounds(from);
