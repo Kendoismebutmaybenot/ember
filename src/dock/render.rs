@@ -615,7 +615,7 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
         }
         let foreground = GetForegroundWindow().0 as isize;
         target.bitmaps.retain(|key, _| icons.contains_key(key));
-        for index in 0..=running {
+        for index in usize::from(!frame.layout.launcher)..=running {
             let x = frame.layout.left(index, frame.layout_scale);
             let slot = logic::slot(frame.layout_scale);
             let item = index.checked_sub(1).and_then(|i| items.get(i + scroll));

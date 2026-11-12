@@ -152,6 +152,7 @@ Open **Settings** from Wisp's tray icon, or edit `%APPDATA%\wisp\config.toml`. T
 | `win_key` | `false` | Tap either Windows key alone to show or hide Wisp instead of Start. Replaces `hotkey` while on |
 | `dock` | `true` | Shows the dock |
 | `dock_autohide` | `true` | Hides the dock until the pointer touches the bottom edge. `false` keeps it visible. |
+| `dock_search_button` | `true` | Shows the search button at the start of the dock. `false` hides it; the hotkey still opens the launcher. |
 | `window_list` | `"multiple"` | `"multiple"` lists an app's windows when it has more than one; `"always"` or `"off"` |
 | `dock_order` | `["launcher", "apps", "tray", "status", "sound", "battery", "wifi", "bluetooth", "clock"]` | Sections from left to right; drag sections to change it. |
 | `dock_status_group` | `["sound", "battery", "wifi", "bluetooth"]` | Items in the status group, in home-cell order. |

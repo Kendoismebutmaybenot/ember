@@ -161,6 +161,7 @@ struct State {
     /// Whether the dock hides until the pointer touches a bottom edge. When
     /// false it stays on the primary screen.
     autohide: bool,
+    search_button: bool,
     suspended: bool,
     frame_paced: bool,
     held_dpi: Option<u32>,
@@ -274,6 +275,7 @@ impl Dock {
             listening: false,
             held: false,
             autohide: true,
+            search_button: true,
             suspended: false,
             frame_paced: false,
             held_dpi: None,
@@ -704,6 +706,24 @@ impl Dock {
         s.sync_tray();
     }
     /// Keeps the dock visible on the primary screen, or lets it auto-hide.
+    /// Shows or hides the search button, the first slot of the dock.
+    pub fn set_search_button(&mut self, shown: bool) {
+        let mut s = self.state.borrow_mut();
+        if s.search_button == shown {
+            return;
+        }
+        s.search_button = shown;
+        s.finish_press(false);
+        s.hide_tip();
+        s.hide_windows();
+        s.hover = None;
+        s.hover_part = None;
+        s.place();
+        unsafe {
+            let _ = InvalidateRect(Some(s.hwnd), None, false);
+        }
+    }
+
     pub fn set_autohide(&mut self, autohide: bool) {
         let mut s = self.state.borrow_mut();
         if s.autohide == autohide {
@@ -984,6 +1004,7 @@ impl State {
 
     fn row_layout(&self) -> logic::RowLayout {
         logic::RowLayout {
+            launcher: self.search_button,
             apps: logic::AppLayout {
                 count: self.count(),
                 pinned: self.pinned.len().saturating_sub(self.scroll).min(self.count()),

@@ -263,6 +263,8 @@ pub fn move_section(order: &mut [Section; 9], section: Section, target: Section)
 /// One padded row, with section gaps only outside adjacent own-icon clusters.
 #[derive(Clone, Copy)]
 pub struct RowLayout {
+    /// The search button in slot 0. Without it the apps start at slot 1 and nothing is hit at 0.
+    pub launcher: bool,
     pub apps: AppLayout,
     pub order: [Section; 9],
     pub tray: Option<usize>,
@@ -276,7 +278,8 @@ impl RowLayout {
         let mut previous = None;
         self.order.into_iter().filter_map(move |section| {
             let width = match section {
-                Section::Launcher => SLOT,
+                Section::Launcher if self.launcher => SLOT,
+                Section::Launcher => 0.0,
                 Section::Apps => self.apps.count as f32 * SLOT + self.apps.gap(),
                 Section::Tray => self
                     .tray
@@ -328,7 +331,7 @@ impl RowLayout {
 
     pub fn left(self, index: usize, scale: f32) -> f32 {
         if index == 0 {
-            return self.section_left(Section::Launcher, scale).unwrap();
+            return self.section_left(Section::Launcher, scale).unwrap_or(pad(scale));
         }
         self.section_left(Section::Apps, scale).unwrap_or(pad(scale)) + self.apps.left(index, scale)
             - left_scaled(1, scale)
@@ -338,7 +341,7 @@ impl RowLayout {
         if !(0.0..height(scale)).contains(&y) {
             return None;
         }
-        (0..=self.apps.count)
+        (usize::from(!self.launcher)..=self.apps.count)
             .find(|&index| (self.left(index, scale)..self.left(index, scale) + slot(scale)).contains(&x))
     }
 
@@ -635,6 +638,7 @@ mod tests {
     #[test]
     fn own_fixed_widths_drive_all_pointer_geometry() {
         let row = RowLayout {
+            launcher: true,
             apps: AppLayout { count: 1, pinned: 0 },
             order: DEFAULT_ORDER,
             tray: None,
@@ -706,6 +710,7 @@ mod tests {
     #[test]
     fn own_icons_cluster_in_visible_order_and_keep_individual_targets() {
         let row = RowLayout {
+            launcher: true,
             percent_width: 28.0,
             apps: AppLayout { count: 0, pinned: 0 },
             order: DEFAULT_ORDER,
@@ -774,6 +779,7 @@ mod tests {
             for icons_mask in 0u8..16 {
                 let icons = std::array::from_fn(|i| !group[i] && icons_mask & (1 << i) != 0);
                 let row = RowLayout {
+                    launcher: true,
                     percent_width: 28.0,
                     apps: AppLayout { count: 0, pinned: 0 },
                     order: DEFAULT_ORDER,
@@ -875,6 +881,7 @@ mod tests {
                 for tray in [None, Some(0), Some(3)] {
                     for (count, pinned) in [(0, 0), (4, 0), (4, 2), (4, 4)] {
                         let row = RowLayout {
+                            launcher: true,
                             percent_width: 28.0,
                             status: StatusPlacement::default(),
                             apps: AppLayout { count, pinned },
@@ -919,6 +926,7 @@ mod tests {
         for source in DEFAULT_ORDER {
             for target in DEFAULT_ORDER {
                 let mut row = RowLayout {
+                    launcher: true,
                     percent_width: 28.0,
                     status: StatusPlacement {
                         group: [true; 4],
@@ -946,6 +954,7 @@ mod tests {
         let parts = parts(None);
         for scale in [0.75, 1.0, 1.25, 2.0] {
             let row = RowLayout {
+                launcher: true,
                 percent_width: 28.0,
                 status: StatusPlacement::default(),
                 apps: AppLayout { count: 0, pinned: 0 },
@@ -1120,6 +1129,25 @@ mod tests {
     }
 
     #[test]
+    fn hidden_search_button_takes_no_space_and_no_hit() {
+        let row = |launcher| RowLayout {
+            launcher,
+            percent_width: 28.0,
+            status: StatusPlacement::default(),
+            apps: AppLayout { count: 2, pinned: 0 },
+            order: DEFAULT_ORDER,
+            tray: None,
+        };
+        let (shown, hidden) = (row(true), row(false));
+        assert_eq!(shown.section_left(Section::Launcher, 1.0), Some(pad(1.0)));
+        assert_eq!(hidden.section_left(Section::Launcher, 1.0), None);
+        assert_eq!(hidden.left(1, 1.0), pad(1.0));
+        assert!(hidden.width(1.0) < shown.width(1.0));
+        assert_eq!(shown.hit(pad(1.0) + 1.0, 10.0, 1.0), Some(0));
+        assert_eq!(hidden.hit(pad(1.0) + 1.0, 10.0, 1.0), Some(1));
+    }
+
+    #[test]
     fn app_icon_pixel_size_scales_with_dpi() {
         assert_eq!(icon_pixels(96, 24.0), 24);
         assert_eq!(icon_pixels(144, DEFAULT_APP_ICON_SIZE), 48);
@@ -1138,6 +1166,7 @@ mod tests {
 
         for scale in [small, normal, large] {
             let row = RowLayout {
+                launcher: true,
                 percent_width: 28.0,
                 status: StatusPlacement::default(),
                 apps: AppLayout { count: 2, pinned: 1 },
@@ -1261,6 +1290,7 @@ mod tests {
             [Part::Chevron, Part::Tray(0), Part::Tray(1), Part::Status, Part::Clock]
         );
         let row = RowLayout {
+            launcher: true,
             percent_width: 28.0,
             status: StatusPlacement::default(),
             apps: AppLayout { count: 2, pinned: 0 },

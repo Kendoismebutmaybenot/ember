@@ -659,6 +659,7 @@ impl Launcher {
             dock.set_window_list_mode(self.config.window_list);
             dock.set_app_icon_size(self.config.dock_icon_size as u32);
             dock.set_order(&self.config.dock_order);
+            dock.set_search_button(self.config.dock_search_button);
             // Notification icons need a home while the taskbar is hidden.
             dock.set_tray(self.taskbar.as_ref().is_some_and(TaskbarHider::is_active));
             dock.set_autohide(self.config.dock_autohide);

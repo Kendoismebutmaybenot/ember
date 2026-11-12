@@ -51,6 +51,11 @@ dock = true
 # false, the dock stays on the main screen and windows stop above it while the
 # taskbar is hidden.
 dock_autohide = true
+
+# The search button at the start of the dock. With false it disappears and the
+# launcher opens with the hotkey only.
+dock_search_button = true
+
 # App window list shown when hovering a running app icon:
 # "multiple" (only when the app has multiple windows), "always", or "off".
 window_list = "multiple"
