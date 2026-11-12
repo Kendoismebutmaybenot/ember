@@ -133,11 +133,7 @@ impl Palette {
         let Some(tint) = tint else {
             return Self::new(dark, translucent);
         };
-        let alpha = if translucent {
-            tint.alpha.unwrap_or(Tint::DEFAULT_ALPHA)
-        } else {
-            1.0
-        };
+        let alpha = tint.alpha.unwrap_or(Tint::DEFAULT_ALPHA);
         let text_dark = if alpha < Tint::TEXT_ALPHA { dark } else { tint.is_dark() };
         let theme = Self::new(dark, translucent);
         let mut palette = Self::new(text_dark, translucent);
@@ -145,8 +141,7 @@ impl Palette {
             palette.background = over(theme.background, tint.rgb, alpha);
             palette.acrylic_tint = theme.acrylic_tint;
         } else {
-            palette.background = rgba(tint.rgb, 1.0);
-            palette.acrylic_tint = rgba(tint.rgb, ACCENT_ALPHA);
+            palette.background = over(theme.background, tint.rgb, alpha);
         }
         palette
     }
@@ -243,8 +238,7 @@ fn composition_accent(hwnd: windows::Win32::Foundation::HWND, accent: Accent, pa
         };
         let set: unsafe extern "system" fn(windows::Win32::Foundation::HWND, *mut Attribute) -> BOOL =
             std::mem::transmute(proc);
-        // A tint with no opacity at all turns the blur off, so keep one step of it.
-        let alpha = ((palette.acrylic_tint.a * 255.0).round() as u32).clamp(1, 255);
+        let alpha = (palette.acrylic_tint.a * 255.0).round() as u32;
         let mut accent = Policy {
             state: match accent {
                 Accent::Off => 0,
@@ -284,10 +278,10 @@ pub fn apply_backdrop(
     let translucent = backdrop != Backdrop::Solid && transparency_available();
     let mut palette = Palette::with_tint(dark, translucent, tint);
     // DWM's caption and dark-mode flags follow the text the tint chose.
-    let dark = palette.text.r > 0.5;
+    let caption_dark = palette.text.r > 0.5;
     unsafe {
         let set = |attr, value: i32| DwmSetWindowAttribute(hwnd, attr, (&value as *const i32).cast(), 4);
-        let _ = set(DWMWA_USE_IMMERSIVE_DARK_MODE, i32::from(dark));
+        let _ = set(DWMWA_USE_IMMERSIVE_DARK_MODE, i32::from(caption_dark));
         let _ = set(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND.0);
         let _ = set(DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE as i32);
         let accent = persistent && backdrop == Backdrop::Acrylic && translucent;
@@ -464,9 +458,9 @@ mod tests {
         let faint = Tint::parse("#00000010");
         assert!(Palette::with_tint(false, true, faint).text.r < 0.5);
         assert!(Palette::with_tint(true, true, faint).text.r > 0.5);
-        // At full strength, or on a surface that is not see-through, the color decides.
+        // At full strength the color decides, even if transparency is unavailable.
         assert!(Palette::with_tint(false, true, Tint::parse("#000000FF")).text.r > 0.5);
-        assert!(Palette::with_tint(false, false, faint).text.r > 0.5);
+        assert!(Palette::with_tint(false, false, faint).text.r < 0.5);
     }
 
     #[test]
@@ -500,5 +494,34 @@ mod tests {
         }
         // The accent keeps the theme's usual strength.
         assert_eq!((Palette::new(true, true).acrylic_tint.a * 255.0).round(), 112.0);
+    }
+    #[test]
+    fn opaque_fallback_preserves_tint_strength_and_theme() {
+        for dark in [false, true] {
+            for value in ["#00000010", "#FFFFFF10", "#00000000", "#FFFFFFFF"] {
+                let tint = Tint::parse(value).unwrap();
+                let expected = over(Palette::new(dark, false).background, tint.rgb, tint.alpha.unwrap());
+                let actual = Palette::with_tint(dark, false, Some(tint)).background;
+                assert_eq!(
+                    (actual.r, actual.g, actual.b, actual.a),
+                    (expected.r, expected.g, expected.b, expected.a)
+                );
+            }
+            // A contrasting tint changes text, but subsequent applications still use the real theme.
+            let contrast = Tint::parse(if dark { "#FFFFFF80" } else { "#00000080" });
+            assert_ne!(Palette::with_tint(dark, true, contrast).text.r > 0.5, dark);
+            let fallback = Palette::with_tint(dark, false, contrast);
+            let expected = over(
+                Palette::new(dark, false).background,
+                contrast.unwrap().rgb,
+                128.0 / 255.0,
+            );
+            assert_eq!(
+                (fallback.background.r, fallback.background.g, fallback.background.b),
+                (expected.r, expected.g, expected.b)
+            );
+            let restored = Palette::with_tint(dark, true, None);
+            assert_eq!(restored.text.r > 0.5, dark);
+        }
     }
 }

@@ -471,7 +471,7 @@ impl Settings {
 
     /// The Advanced section's rows: the switch, then the color while it is on.
     fn advanced_rows(&self, p: Palette, cx: &mut Context<Self>) -> Div {
-        let custom = !self.config.dock_color.is_empty();
+        let custom = !self.config.dock_color.trim().is_empty();
         v_flex()
             .child(divider(p))
             .child(row(

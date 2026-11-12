@@ -129,6 +129,7 @@ struct State {
     backdrop: Backdrop,
     /// The user's dock color, kept so system theme changes reapply it.
     tint: Option<Tint>,
+    dark: bool,
     window_list_mode: WindowListMode,
     app_icon_size: f32,
     renderer: render::Renderer,
@@ -248,6 +249,7 @@ impl Dock {
             palette: Palette::new(true, true),
             backdrop: Backdrop::Acrylic,
             tint: None,
+            dark: true,
             window_list_mode: WindowListMode::default(),
             app_icon_size: logic::DEFAULT_APP_ICON_SIZE,
             renderer: render::Renderer::new()?,
@@ -866,6 +868,7 @@ impl State {
     fn apply_material(&mut self, dark: bool, backdrop: Backdrop, tint: Option<Tint>) {
         self.backdrop = backdrop;
         self.tint = tint;
+        self.dark = dark;
         self.palette = crate::theme::apply_backdrop(self.hwnd, dark, backdrop, true, tint);
         // Popups over the dock (flyouts, tooltips, window lists) wear the same color.
         for hwnd in [self.flyout, self.tip, self.windows] {
@@ -2567,7 +2570,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         {
             match msg {
                 WM_SETTINGCHANGE | WM_POWERBROADCAST | WM_THEMECHANGED => {
-                    let dark = s.palette.text.r > 0.5;
+                    let dark = s.dark;
                     let (backdrop, tint) = (s.backdrop, s.tint);
                     s.apply_material(dark, backdrop, tint);
                 }
