@@ -34,6 +34,8 @@ pub struct Config {
     pub dock_autohide: bool,
     pub dock_search_button: bool,
     pub dock_icon_size: i64,
+    /// `#RRGGBB` or `#RRGGBBAA`, or empty for the theme's colors.
+    pub dock_color: String,
     pub hide_taskbar: bool,
     pub window_list: String,
     pub dock_status_group: Vec<String>,
@@ -75,6 +77,8 @@ impl Config {
             .filter(|value| *value >= 0)
             .ok_or("dock_icon_size must be a positive whole number of DIP.")?
             .clamp(24, 40);
+        let dock_color = string("dock_color")?;
+        validate_color(&dock_color)?;
         let max_results = get("max_results")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -120,6 +124,7 @@ impl Config {
             dock_autohide: boolean("dock_autohide")?,
             dock_search_button: boolean("dock_search_button")?,
             dock_icon_size,
+            dock_color,
             hide_taskbar: boolean("hide_taskbar")?,
             window_list,
             dock_status_group: placement.names(true),
@@ -134,6 +139,32 @@ fn choice(value: &str, choices: &[&str], key: &str) -> Result<(), String> {
     } else {
         Err(format!("{key} must be {}.", choices.join(", ")))
     }
+}
+
+/// Accepts an empty color (the theme's) or `#RRGGBB` / `#RRGGBBAA`, as the launcher reads it.
+pub fn validate_color(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    match value.strip_prefix('#') {
+        Some(hex) if matches!(hex.len(), 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()) => Ok(()),
+        _ => Err("Use a color like #1E3A8A, or #1E3A8AC0 to set its opacity.".into()),
+    }
+}
+
+/// Splits a valid, non-empty color into `0xRRGGBB` and its opacity byte.
+pub fn color_parts(value: &str) -> Option<(u32, u8)> {
+    validate_color(value).ok()?;
+    let hex = value.trim().strip_prefix('#')?;
+    let rgb = u32::from_str_radix(&hex[..6], 16).ok()?;
+    let alpha = if hex.len() == 8 {
+        u8::from_str_radix(&hex[6..], 16).ok()?
+    } else {
+        // The launcher's strength for a color without one.
+        0xBF
+    };
+    Some((rgb, alpha))
 }
 
 pub fn validate_url(value: &str) -> Result<(), String> {
@@ -249,6 +280,7 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "position" if !matches!(value.as_str(), Some("center" | "bottom")) => {
             return Err("position must be center or bottom.".into());
         }
+        "dock_color" => validate_color(value.as_str().ok_or("Dock color must be text.")?)?,
         "dock_icon_size" if !value.as_integer().is_some_and(|size| (24..=40).contains(&size)) => {
             return Err("Choose an app icon size between 24 and 40 DIP.".into());
         }
@@ -420,6 +452,8 @@ mod tests {
             ("window_list", "sometimes".into()),
             ("dock_icon_size", 23.into()),
             ("dock_icon_size", 41.into()),
+            ("dock_color", "blue".into()),
+            ("dock_color", "#12345".into()),
             ("unknown", true.into()),
         ] {
             assert!(store.set(key, value).is_err(), "{key}");
@@ -429,6 +463,14 @@ mod tests {
         assert!(validate_url("https://example.com/?q={QUERY}").is_err());
         assert_eq!(store.set("max_results", 20.into()).unwrap().max_results, 20);
         assert_eq!(store.set("dock_icon_size", 40.into()).unwrap().dock_icon_size, 40);
+        assert_eq!(
+            store.set("dock_color", "#1E3A8AC0".into()).unwrap().dock_color,
+            "#1E3A8AC0"
+        );
+        assert_eq!(store.set("dock_color", "".into()).unwrap().dock_color, "");
+        assert_eq!(color_parts("#1E3A8A"), Some((0x1E3A8A, 0xBF)));
+        assert_eq!(color_parts("#1E3A8A40"), Some((0x1E3A8A, 0x40)));
+        assert_eq!(color_parts(""), None);
     }
 
     #[test]

@@ -64,6 +64,8 @@ pub struct Config {
     pub dock_order: Vec<String>,
     pub dock_status_group: Vec<String>,
     pub dock_status_icons: Vec<String>,
+    /// `#RRGGBB` or `#RRGGBBAA`, or empty for the theme's colors.
+    pub dock_color: String,
     pub hotkey: String,
     pub win_key: bool,
     pub max_results: usize,
@@ -84,6 +86,11 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The dock's color, or `None` for the theme's colors.
+    pub fn dock_tint(&self) -> Option<crate::theme::Tint> {
+        crate::theme::Tint::parse(&self.dock_color)
+    }
+
     pub fn path() -> PathBuf {
         util::data_dir().join("config.toml")
     }
@@ -95,6 +102,13 @@ impl Config {
     /// Creates the default config on first run. Returns defaults and an error
     /// if the file cannot be read or parsed.
     pub fn load() -> (Config, Option<String>) {
+        Self::read().unwrap_or_else(|error| (Config::default(), Some(error)))
+    }
+
+    /// Reads the config, creating the default one on first run. `Err` means
+    /// the file cannot be read or parsed. A warning comes with a config that
+    /// is usable, where one value fell back to its default.
+    pub fn read() -> Result<(Config, Option<String>), String> {
         let path = Self::path();
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -103,16 +117,27 @@ impl Config {
                 DEFAULT_CONFIG.to_string()
             }
             // Preserve unreadable files, including locked files and invalid UTF-8.
-            Err(e) => return (Config::default(), Some(format!("config.toml: {e}"))),
+            Err(e) => return Err(format!("config.toml: {e}")),
         };
-        match Self::parse(&text) {
-            Ok(mut config) => {
-                config.max_results = config.max_results.clamp(1, 20);
-                config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
-                (config, None)
-            }
-            Err(e) => (Config::default(), Some(format!("config.toml: {}", e.message()))),
+        let mut config = Self::parse(&text).map_err(|e| format!("config.toml: {}", e.message()))?;
+        config.max_results = config.max_results.clamp(1, 20);
+        config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
+        let warning = config.drop_unusable_color();
+        Ok((config, warning))
+    }
+
+    /// Clears a `dock_color` that is not a color, which returns the dock to
+    /// the theme's colors, and says what was wrong with it.
+    fn drop_unusable_color(&mut self) -> Option<String> {
+        if self.dock_color.trim().is_empty() || self.dock_tint().is_some() {
+            return None;
         }
+        let warning = format!(
+            "config.toml: dock_color \"{}\" must look like #1E3A8A or #1E3A8AC0. Using the theme's colors.",
+            self.dock_color
+        );
+        self.dock_color.clear();
+        Some(warning)
     }
 
     /// Reads a config, taking each missing key from `config-0.3.toml` or the
@@ -247,6 +272,8 @@ mod tests {
         let default = Config::default();
         assert!(default.dock && default.hide_taskbar);
         assert_eq!(default.dock_icon_size, 32);
+        assert_eq!(default.dock_tint(), None);
+        assert_eq!(config.dock_color, "");
         assert_eq!(default.position, Position::Bottom);
         assert!(Config::parse("dock = \"yes\"").is_err());
     }
@@ -256,5 +283,18 @@ mod tests {
         assert!(!Config::default().win_key);
         assert!(Config::parse("win_key = true").unwrap().win_key);
         assert!(Config::parse("win_key = 'true'").is_err());
+    }
+
+    #[test]
+    fn an_unusable_dock_color_falls_back_to_the_theme() {
+        for bad in ["#12345", "blue"] {
+            let mut config = Config::parse(&format!("dock_color = '{bad}'\nmax_results = 5")).unwrap();
+            assert!(config.drop_unusable_color().unwrap().contains(bad));
+            // The rest of the config still applies.
+            assert_eq!((config.dock_tint(), config.max_results), (None, 5));
+        }
+        let mut config = Config::parse("dock_color = '#1E3A8AC0'").unwrap();
+        assert_eq!(config.drop_unusable_color(), None);
+        assert!(config.dock_tint().is_some());
     }
 }
