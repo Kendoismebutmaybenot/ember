@@ -2491,9 +2491,6 @@ fn run_drag(hwnd: HWND, payload: Payload) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // The dock's app menu lands here when the dock shares the launcher's window.
-    if let Some(result) = crate::dock::menu_message(msg, wparam, lparam) {
-        return result;
-    }
     if DRAGGING.with(Cell::get)
         && matches!(
             msg,

@@ -67,7 +67,6 @@ const MENU_PIN: usize = 1;
 const MENU_CLOSE: usize = 2;
 /// The app's name, which starts a new window, and its second menu.
 const MENU_NEW_WINDOW: usize = 10;
-const MENU_OPEN: usize = 11;
 const MENU_ADMIN: usize = 12;
 const MENU_LOCATION: usize = 13;
 const MENU_PROPERTIES: usize = 14;
@@ -2306,7 +2305,12 @@ impl State {
                 // The taskbar's order, with items that do not apply left out:
                 // the app's name, pinning, then closing.
                 let name = HSTRING::from(app.name.as_str());
-                let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_WINDOW, &name);
+                // The parent owns the submenu only after a successful attach.
+                if AppendMenuW(menu, MF_POPUP, submenu.0 as usize, &name).is_err() {
+                    let _ = DestroyMenu(submenu);
+                    let _ = DestroyMenu(menu);
+                    break 'menus;
+                }
                 let pin = if pinned {
                     w!("Unpin from dock")
                 } else {
@@ -2324,41 +2328,31 @@ impl State {
                 if ending.is_some() {
                     let _ = AppendMenuW(menu, MF_STRING, MENU_END_TASK, w!("End task"));
                 }
-                // Right-clicking the name opens this, as on the taskbar.
-                let _ = AppendMenuW(submenu, MF_STRING, MENU_OPEN, w!("Open"));
+                let _ = AppendMenuW(submenu, MF_STRING, MENU_NEW_WINDOW, w!("New window"));
                 if elevatable {
                     let _ = AppendMenuW(submenu, MF_STRING, MENU_ADMIN, w!("Run as administrator"));
                 }
                 if location.is_some() {
                     let _ = AppendMenuW(submenu, MF_STRING, MENU_LOCATION, w!("Open file location"));
                 }
-                if pinned {
-                    let _ = AppendMenuW(submenu, MF_STRING, MENU_PIN, w!("Unpin from dock"));
-                }
                 if location.is_some() {
                     let _ = AppendMenuW(submenu, MF_STRING, MENU_PROPERTIES, w!("Properties"));
                 }
                 let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
-                // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy,
-                // so the second menu is opened from `menu_message`, outside the state.
                 let _ = SetForegroundWindow(self.hwnd);
-                APP_SUBMENU.set(Some(AppSubmenu {
+                let command = TrackPopupMenu(
                     menu,
-                    submenu,
-                    owner: self.hwnd,
-                    chosen: 0,
-                }));
-                // Notifications stay on: without them Windows sends no WM_MENURBUTTONUP.
-                let command = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, None, self.hwnd, None).0;
-                let chosen = APP_SUBMENU.take().map_or(0, |state| state.chosen);
+                    TPM_RETURNCMD | TPM_NONOTIFY,
+                    point.x,
+                    point.y,
+                    None,
+                    self.hwnd,
+                    None,
+                )
+                .0 as usize;
+                // DestroyMenu recursively destroys the attached submenu.
                 let _ = DestroyMenu(menu);
-                let _ = DestroyMenu(submenu);
-                let command = if command != 0 {
-                    command as usize
-                } else {
-                    chosen as usize
-                };
                 match command {
                     MENU_PIN => self.toggle_pin(&id),
                     MENU_CLOSE => {
@@ -2366,7 +2360,7 @@ impl State {
                             let _ = open_windows::close(hwnd);
                         }
                     }
-                    MENU_NEW_WINDOW | MENU_OPEN => self.launch(&app, false),
+                    MENU_NEW_WINDOW => self.launch(&app, false),
                     MENU_ADMIN => self.launch(&app, true),
                     MENU_LOCATION => {
                         if let Some(path) = &location
@@ -2598,52 +2592,6 @@ fn load_pins() -> Vec<AppEntry> {
         .collect()
 }
 
-/// The open app menu, whose name item opens a second menu on right-click.
-#[derive(Clone, Copy)]
-struct AppSubmenu {
-    menu: HMENU,
-    submenu: HMENU,
-    owner: HWND,
-    /// The command picked in the second menu, or 0.
-    chosen: u32,
-}
-
-thread_local! {
-    static APP_SUBMENU: Cell<Option<AppSubmenu>> = const { Cell::new(None) };
-}
-
-/// Opens the app menu's second menu when its name item is right-clicked, as
-/// the taskbar does. Call first in every window procedure that can own the
-/// app menu: the dock's, and the launcher's when the dock shares its window.
-/// The dock's state is borrowed while the menu is open, so this keeps its own.
-pub fn menu_message(msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
-    let state = APP_SUBMENU.get()?;
-    // wParam is the item's position; the name is the first item.
-    if msg != WM_MENURBUTTONUP || lp.0 != state.menu.0 as isize || wp.0 != 0 {
-        return None;
-    }
-    unsafe {
-        let mut point = POINT::default();
-        let _ = GetCursorPos(&mut point);
-        let chosen = TrackPopupMenu(
-            state.submenu,
-            TPM_RECURSE | TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-            point.x,
-            point.y,
-            None,
-            state.owner,
-            None,
-        )
-        .0 as u32;
-        if chosen != 0 {
-            APP_SUBMENU.set(Some(AppSubmenu { chosen, ..state }));
-            // Closes the first menu, which then returns no command.
-            let _ = EndMenu();
-        }
-    }
-    Some(LRESULT(0))
-}
-
 /// Whether Windows offers End task on the taskbar: Settings > System > For
 /// developers > End task. Off for most people, so the dock hides it too.
 fn end_task_enabled() -> bool {
@@ -2769,9 +2717,6 @@ unsafe extern "system" fn window_event(
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    if let Some(result) = menu_message(msg, wp, lp) {
-        return result;
-    }
     unsafe {
         if msg == WM_NCCREATE {
             let create = &*(lp.0 as *const CREATESTRUCTW);
