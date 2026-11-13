@@ -367,34 +367,22 @@ pub fn paint_background(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1HwndRenderTarget,
     brush: &windows::Win32::Graphics::Direct2D::ID2D1SolidColorBrush,
     palette: &Palette,
-    radius: f32,
+    _radius: f32,
 ) {
     let size = unsafe { rt.GetSize() };
     let (width, height) = (size.width, size.height);
     use windows::Win32::Graphics::Direct2D::Common::*;
     use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
     unsafe {
-        // Clear the rectangular target, then tint only the rounded surface.
-        // A rectangular color clear leaves saturated pixels outside the
-        // hairline, where the window region and DWM round independently.
-        rt.Clear(Some(&D2D1_COLOR_F::default()));
-        brush.SetColor(&palette.background);
-        rt.FillRoundedRectangle(
-            &D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: width,
-                    bottom: height,
-                },
-                radiusX: radius,
-                radiusY: radius,
-            },
-            brush,
-        );
+        // DWM owns the antialiased outer silhouette. Fill through that edge:
+        // a second rounded alpha mask exposes the theme acrylic between the
+        // independently rasterized curves, especially with an opaque tint.
+        rt.Clear(Some(&palette.background));
         let (mut dpi, mut dpi_y) = (96.0, 96.0);
         rt.GetDpi(&mut dpi, &mut dpi_y);
         let pixel = 96.0 / dpi;
+        // DWMWCP_ROUND uses the native 8-DIP corner for every surface.
+        let radius = 8.0;
         brush.SetColor(&D2D1_COLOR_F {
             a: if palette.text.r > 0.5 { 0.14 } else { 0.12 },
             ..palette.text
@@ -417,19 +405,13 @@ pub fn paint_background(
     }
 }
 
-/// Windows takes ownership of the region on success. Composition acrylic is
-/// clipped to the same animated outline as the Direct2D border.
-pub fn shape(hwnd: windows::Win32::Foundation::HWND, width: i32, height: i32, radius: f32, dpi: u32) {
-    use windows::Win32::Graphics::Gdi::*;
+/// Leave corner coverage to DWM. An integer GDI region disables DWM's
+/// antialiased window corners and cuts off Direct2D's edge coverage.
+pub fn shape(hwnd: windows::Win32::Foundation::HWND, _width: i32, _height: i32, _radius: f32, _dpi: u32) {
     unsafe {
-        let diameter = (radius * 2.0 * dpi as f32 / 96.0).round() as i32;
-        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
-        if !region.is_invalid() && SetWindowRgn(hwnd, Some(region), false) == 0 {
-            let _ = DeleteObject(region.into());
-        }
+        let _ = windows::Win32::Graphics::Gdi::SetWindowRgn(hwnd, None, false);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
