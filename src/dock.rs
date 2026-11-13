@@ -705,7 +705,6 @@ impl Dock {
         }
         s.sync_tray();
     }
-    /// Keeps the dock visible on the primary screen, or lets it auto-hide.
     /// Shows or hides the search button, the first slot of the dock.
     pub fn set_search_button(&mut self, shown: bool) {
         let mut s = self.state.borrow_mut();
@@ -724,6 +723,7 @@ impl Dock {
         }
     }
 
+    /// Keeps the dock visible on the primary screen, or lets it auto-hide.
     pub fn set_autohide(&mut self, autohide: bool) {
         let mut s = self.state.borrow_mut();
         if s.autohide == autohide {
