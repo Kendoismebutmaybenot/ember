@@ -374,7 +374,24 @@ pub fn paint_background(
     use windows::Win32::Graphics::Direct2D::Common::*;
     use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
     unsafe {
-        rt.Clear(Some(&palette.background));
+        // Clear the rectangular target, then tint only the rounded surface.
+        // A rectangular color clear leaves saturated pixels outside the
+        // hairline, where the window region and DWM round independently.
+        rt.Clear(Some(&D2D1_COLOR_F::default()));
+        brush.SetColor(&palette.background);
+        rt.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: width,
+                    bottom: height,
+                },
+                radiusX: radius,
+                radiusY: radius,
+            },
+            brush,
+        );
         let (mut dpi, mut dpi_y) = (96.0, 96.0);
         rt.GetDpi(&mut dpi, &mut dpi_y);
         let pixel = 96.0 / dpi;
@@ -390,8 +407,8 @@ pub fn paint_background(
                     right: width - pixel / 2.0,
                     bottom: height - pixel / 2.0,
                 },
-                radiusX: radius,
-                radiusY: radius,
+                radiusX: (radius - pixel / 2.0).max(0.0),
+                radiusY: (radius - pixel / 2.0).max(0.0),
             },
             brush,
             pixel,
